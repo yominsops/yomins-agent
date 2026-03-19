@@ -1,0 +1,40 @@
+[Unit]
+Description=YominsOps Metrics Agent
+Documentation=https://docs.yominsops.com/agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yomins-agent
+Group=yomins-agent
+
+# Load token and server URL from this file.
+# Create it with: echo "YOMINS_SERVER=...\nYOMINS_TOKEN=..." > /etc/yomins-agent/env
+EnvironmentFile=-/etc/yomins-agent/env
+
+ExecStart=/usr/local/bin/yomins-agent
+
+# systemd automatically creates /var/lib/yomins-agent and sets ownership
+# to the service user. This is where agent_id is persisted.
+StateDirectory=yomins-agent
+StateDirectoryMode=0700
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/
+ReadWritePaths=/var/lib/yomins-agent
+
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+# Give the agent time to flush on shutdown.
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=multi-user.target
