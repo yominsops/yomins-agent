@@ -38,4 +38,3 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
-          args: --go=1.24

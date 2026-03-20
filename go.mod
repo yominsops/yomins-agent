@@ -1,6 +1,6 @@
 module github.com/yominsops/yomins-agent
 
-go 1.25.6
+go 1.24
 
 require (
 	github.com/prometheus/client_model v0.6.1
