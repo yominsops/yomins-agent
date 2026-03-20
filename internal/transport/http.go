@@ -104,7 +104,7 @@ func (t *HTTPTransport) do(ctx context.Context, payload []byte) error {
 
 	// 4xx errors (except 429) are permanent — do not retry.
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
-		return backoff.Permanent(fmt.Errorf("server returned %d (permanent error)", resp.StatusCode))
+		return backoff.Permanent(fmt.Errorf("server returned %d (permanent error) for %s %s", resp.StatusCode, req.Method, req.URL))
 	}
 
 	// 5xx and 429 — retryable.
