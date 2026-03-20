@@ -123,7 +123,6 @@ resolve_version() {
 download_binary() {
     local bin_url="${RELEASES_BASE}/download/${AGENT_VERSION}/${BINARY_ASSET}"
     local sha_url="${bin_url}.sha256"
-    local tmp_dir
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "${tmp_dir}"' EXIT
 
