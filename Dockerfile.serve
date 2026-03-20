@@ -1,0 +1,2 @@
+FROM nginx:alpine
+COPY install.sh /usr/share/nginx/html/install.sh
