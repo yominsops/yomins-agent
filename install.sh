@@ -22,6 +22,7 @@ AGENT_SERVER="https://ingest.yominsops.com"
 AGENT_INTERVAL="60s"
 AGENT_VERSION=""            # resolved to latest if empty
 SKIP_CONFIRM=false
+ALLOW_HTTP=false            # dev/testing only: bypass HTTPS requirement
 
 BINARY_NAME="yomins-agent"
 SERVICE_NAME="yomins-agent"
@@ -64,11 +65,12 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --token)     AGENT_TOKEN="$2";    shift 2 ;;
-            --server)    AGENT_SERVER="$2";   shift 2 ;;
-            --interval)  AGENT_INTERVAL="$2"; shift 2 ;;
-            --version)   AGENT_VERSION="$2";  shift 2 ;;
-            --yes|-y)    SKIP_CONFIRM=true;   shift   ;;
+            --token)      AGENT_TOKEN="$2";    shift 2 ;;
+            --server)     AGENT_SERVER="$2";   shift 2 ;;
+            --interval)   AGENT_INTERVAL="$2"; shift 2 ;;
+            --version)    AGENT_VERSION="$2";  shift 2 ;;
+            --yes|-y)     SKIP_CONFIRM=true;   shift   ;;
+            --allow-http) ALLOW_HTTP=true;     shift   ;;
             --help|-h)   usage; exit 0 ;;
             *) die "Unknown option: $1. Run with --help for usage." ;;
         esac
@@ -264,7 +266,7 @@ main() {
     # Validate before doing anything.
     [[ "$(id -u)" -eq 0 ]] || die "This script must be run as root (use sudo)."
     [[ -n "$AGENT_TOKEN" ]]  || die "--token is required. Run with --help for usage."
-    [[ "$AGENT_SERVER" == https://* ]] \
+    [[ "$AGENT_SERVER" == https://* ]] || [[ "$ALLOW_HTTP" == true ]] \
         || die "--server must use HTTPS. Got: ${AGENT_SERVER}"
 
     require_cmd curl
