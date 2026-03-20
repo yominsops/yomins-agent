@@ -125,7 +125,7 @@ docker run -d \
   -v yomins-agent-state:/var/lib/yomins-agent \
   -e YOMINS_SERVER=https://ingest.yominsops.com \
   -e YOMINS_TOKEN=<PROJECT_TOKEN> \
-  ghcr.io/yominsops/agent:latest
+  ghcr.io/yominsops/yomins-agent:latest
 ```
 
 The named volume `yomins-agent-state` persists the `agent_id` across container restarts.
@@ -147,14 +147,30 @@ Dockerfile
 Makefile
 ```
 
+## Releases
+
+Releases are published automatically via GitHub Actions when a semver tag is pushed:
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+Each release includes:
+- Static binaries for `linux/amd64` and `linux/arm64`
+- SHA-256 checksums for each binary
+- The systemd service unit file
+- Docker image pushed to `ghcr.io/yominsops/yomins-agent`
+
+CI runs on every push and pull request to `main` (tests + lint). Releases are only created on tag pushes.
+
 ## Building from source
 
 ```bash
-git clone https://github.com/yominsops/agent.git
-cd agent
+git clone https://github.com/yominsops/yomins-agent.git
+cd yomins-agent
 make build          # produces ./yomins-agent
 make test           # unit tests
 make test-integration  # real OS tests (Linux recommended)
 ```
 
-Requires Go 1.21 or later.
+Requires Go 1.25 or later.

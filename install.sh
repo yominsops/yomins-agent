@@ -30,7 +30,7 @@ CONFIG_DIR="/etc/yomins-agent"
 STATE_DIR="/var/lib/yomins-agent"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE_FILE="${SYSTEMD_DIR}/${SERVICE_NAME}.service"
-RELEASES_BASE="https://github.com/yominsops/agent/releases"
+RELEASES_BASE="https://github.com/yominsops/yomins-agent/releases"
 
 # ---------------------------------------------------------------------------
 # Helpers
