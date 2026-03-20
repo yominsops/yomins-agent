@@ -130,6 +130,16 @@ docker run -d \
 
 The named volume `yomins-agent-state` persists the `agent_id` across container restarts.
 
+## Development: serving install.sh locally
+
+`Dockerfile.serve` builds a minimal nginx image that serves `install.sh` over HTTP. It is used in the local dev docker-compose as the `install-server` service (port 8080):
+
+```bash
+curl http://localhost:8080/install.sh
+```
+
+No HTTPS or certificates are needed — a reverse proxy handles TLS termination in production.
+
 ## Project layout
 
 ```
