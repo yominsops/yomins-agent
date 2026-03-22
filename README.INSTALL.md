@@ -16,6 +16,12 @@ The install script handles everything: downloads the correct binary for your arc
 curl -fsSL https://get.yominsops.com/agent | sudo bash -s -- --token <YOUR_PROJECT_TOKEN>
 ```
 
+**Upgrading an existing install** — the script detects `/etc/yomins-agent/env` and runs in upgrade mode automatically. No arguments needed; the token and config are read from the existing file:
+
+```bash
+curl -fsSL https://get.yominsops.com/agent | sudo bash
+```
+
 **Additional options:**
 
 ```bash
@@ -29,7 +35,7 @@ curl -fsSL https://get.yominsops.com/agent | sudo bash -s -- \
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--token` | *(required)* | Project-scoped auth token |
+| `--token` | *(required for fresh installs)* | Project-scoped auth token |
 | `--server` | `https://ingest.yominsops.com` | Ingestion endpoint URL |
 | `--interval` | `60s` | Push interval (e.g. `30s`, `2m`) |
 | `--version` | latest | Pin to a specific release |

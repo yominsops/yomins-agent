@@ -155,6 +155,12 @@ The agent upgrades itself automatically. On startup and every `--auto-upgrade-in
 
 To disable auto-upgrade set `YOMINS_DISABLE_AUTO_UPGRADE=true` in `/etc/yomins-agent/env`.
 
+**Enabling auto-upgrade on an existing install** — re-run the install script without arguments. It detects the existing config and upgrades the binary, service file, and helper scripts in place:
+
+```bash
+curl -fsSL https://get.yominsops.com/agent | sudo bash
+```
+
 Dev builds (`version = "dev"`) never trigger an upgrade check.
 
 ## Project layout

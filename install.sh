@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# YominsOps Agent — one-command installer
+# YominsOps Agent — one-command installer / upgrader
 #
-# Usage:
+# Fresh install:
 #   curl -fsSL https://get.yominsops.com/agent | sudo bash -s -- --token <TOKEN>
 #
+# Upgrade existing install (token read from /etc/yomins-agent/env):
+#   curl -fsSL https://get.yominsops.com/agent | sudo bash
+#
 # Options:
-#   --token <TOKEN>       Project-scoped token (required)
+#   --token <TOKEN>       Project-scoped token (required for fresh installs;
+#                         optional when /etc/yomins-agent/env already exists)
 #   --server <URL>        Ingestion endpoint (default: https://ingest.yominsops.com)
 #   --interval <DURATION> Push interval, e.g. 30s, 2m (default: 60s)
 #   --version <VERSION>   Agent version to install (default: latest)
@@ -23,6 +27,7 @@ AGENT_INTERVAL="60s"
 AGENT_VERSION=""            # resolved to latest if empty
 SKIP_CONFIRM=false
 ALLOW_HTTP=false            # dev/testing only: bypass HTTPS requirement
+IS_UPGRADE=false            # set to true when upgrading an existing install
 
 BINARY_NAME="yomins-agent"
 SERVICE_NAME="yomins-agent"
@@ -54,7 +59,9 @@ usage() {
 Usage: install.sh [OPTIONS]
 
 Options:
-  --token <TOKEN>       Project-scoped auth token (required)
+  --token <TOKEN>       Project-scoped auth token
+                        Required for fresh installs; optional when
+                        ${CONFIG_DIR}/env already exists (upgrade mode)
   --server <URL>        Ingestion endpoint URL (default: ${AGENT_SERVER})
   --interval <DURATION> Metrics push interval (default: ${AGENT_INTERVAL})
   --version <VERSION>   Agent version to install (default: latest)
@@ -76,6 +83,34 @@ parse_args() {
             *) die "Unknown option: $1. Run with --help for usage." ;;
         esac
     done
+}
+
+# ---------------------------------------------------------------------------
+# Existing config detection
+# ---------------------------------------------------------------------------
+# If --token was not supplied but /etc/yomins-agent/env exists, read the
+# current values from it so we can run in upgrade mode (no config rewrite).
+load_existing_config() {
+    local env_file="${CONFIG_DIR}/env"
+    [[ -f "$env_file" ]] || return 1
+
+    # Source only the variables we care about; ignore anything else.
+    local line key value
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Strip comments and blank lines.
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+        key="${line%%=*}"
+        value="${line#*=}"
+        case "$key" in
+            YOMINS_TOKEN)    [[ -z "$AGENT_TOKEN" ]]    && AGENT_TOKEN="$value" ;;
+            YOMINS_SERVER)   [[ "$AGENT_SERVER" == "https://ingest.yominsops.com" ]] \
+                                 && AGENT_SERVER="$value" ;;
+            YOMINS_INTERVAL) [[ "$AGENT_INTERVAL" == "60s" ]] \
+                                 && AGENT_INTERVAL="$value" ;;
+        esac
+    done < "$env_file"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -172,16 +207,25 @@ confirm() {
         return
     fi
     printf "\n"
-    printf "${BOLD}Installation summary${RESET}\n"
-    printf "  Binary:   %s\n" "${INSTALL_DIR}/${BINARY_NAME}"
-    printf "  Config:   %s/env\n" "${CONFIG_DIR}"
-    printf "  Service:  %s\n" "${SERVICE_FILE}"
-    printf "  Server:   %s\n" "${AGENT_SERVER}"
-    printf "  Interval: %s\n" "${AGENT_INTERVAL}"
-    printf "  Version:  %s\n" "${AGENT_VERSION}"
+    if [[ "$IS_UPGRADE" == true ]]; then
+        printf "${BOLD}Upgrade summary${RESET}\n"
+        printf "  Binary:   %s\n" "${INSTALL_DIR}/${BINARY_NAME}"
+        printf "  Service:  %s\n" "${SERVICE_FILE}"
+        printf "  Version:  %s\n" "${AGENT_VERSION}"
+        printf "  Config:   preserved (${CONFIG_DIR}/env unchanged)\n"
+    else
+        printf "${BOLD}Installation summary${RESET}\n"
+        printf "  Binary:   %s\n" "${INSTALL_DIR}/${BINARY_NAME}"
+        printf "  Config:   %s/env\n" "${CONFIG_DIR}"
+        printf "  Service:  %s\n" "${SERVICE_FILE}"
+        printf "  Server:   %s\n" "${AGENT_SERVER}"
+        printf "  Interval: %s\n" "${AGENT_INTERVAL}"
+        printf "  Version:  %s\n" "${AGENT_VERSION}"
+    fi
     printf "\n"
-    read -rp "Proceed with installation? [y/N] " answer
-    [[ "$answer" =~ ^[Yy]$ ]] || { info "Installation cancelled."; exit 0; }
+    local prompt="Proceed with ${IS_UPGRADE:+upgrade}${IS_UPGRADE:-installation}? [y/N] "
+    read -rp "$prompt" answer
+    [[ "$answer" =~ ^[Yy]$ ]] || { info "Cancelled."; exit 0; }
 }
 
 # ---------------------------------------------------------------------------
@@ -193,6 +237,11 @@ install_binary() {
 }
 
 write_config() {
+    if [[ "$IS_UPGRADE" == true ]]; then
+        info "Preserving existing config (${CONFIG_DIR}/env)."
+        return
+    fi
+
     mkdir -p "$CONFIG_DIR"
     local env_file="${CONFIG_DIR}/env"
 
@@ -287,9 +336,22 @@ verify_running() {
 main() {
     parse_args "$@"
 
-    # Validate before doing anything.
     [[ "$(id -u)" -eq 0 ]] || die "This script must be run as root (use sudo)."
-    [[ -n "$AGENT_TOKEN" ]]  || die "--token is required. Run with --help for usage."
+
+    # Upgrade mode: --token not supplied but an existing config is present.
+    # Load token and other values from the existing env file so they are
+    # available for validation and the confirmation summary.
+    if [[ -z "$AGENT_TOKEN" ]]; then
+        if load_existing_config; then
+            IS_UPGRADE=true
+            info "Existing installation detected — running in upgrade mode."
+        else
+            die "--token is required for a fresh install. Run with --help for usage."
+        fi
+    fi
+
+    [[ -n "$AGENT_TOKEN" ]] \
+        || die "Could not read YOMINS_TOKEN from ${CONFIG_DIR}/env. Pass --token explicitly."
     [[ "$AGENT_SERVER" == https://* ]] || [[ "$ALLOW_HTTP" == true ]] \
         || die "--server must use HTTPS. Got: ${AGENT_SERVER}"
 
@@ -311,7 +373,11 @@ main() {
     verify_running
 
     printf "\n"
-    success "YominsOps agent ${AGENT_VERSION} installed and running."
+    if [[ "$IS_UPGRADE" == true ]]; then
+        success "YominsOps agent upgraded to ${AGENT_VERSION}."
+    else
+        success "YominsOps agent ${AGENT_VERSION} installed and running."
+    fi
     info "Logs:   journalctl -u ${SERVICE_NAME} -f"
     info "Status: systemctl status ${SERVICE_NAME}"
 }
