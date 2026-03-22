@@ -120,6 +120,67 @@ func TestValidate_Valid(t *testing.T) {
 	}
 }
 
+func TestLoad_ExcludeFiltersFlags(t *testing.T) {
+	clearEnv(t)
+	cfg, err := loadWithArgs([]string{
+		"--server=http://x.com", "--token=t",
+		"--exclude-mountpoints=/proc,/sys, /dev/shm ",
+		"--exclude-interfaces=docker0, virbr0",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	wantMP := []string{"/proc", "/sys", "/dev/shm"}
+	if len(cfg.ExcludeMountpoints) != len(wantMP) {
+		t.Fatalf("ExcludeMountpoints = %v, want %v", cfg.ExcludeMountpoints, wantMP)
+	}
+	for i, v := range wantMP {
+		if cfg.ExcludeMountpoints[i] != v {
+			t.Errorf("ExcludeMountpoints[%d] = %q, want %q", i, cfg.ExcludeMountpoints[i], v)
+		}
+	}
+	wantIF := []string{"docker0", "virbr0"}
+	if len(cfg.ExcludeInterfaces) != len(wantIF) {
+		t.Fatalf("ExcludeInterfaces = %v, want %v", cfg.ExcludeInterfaces, wantIF)
+	}
+	for i, v := range wantIF {
+		if cfg.ExcludeInterfaces[i] != v {
+			t.Errorf("ExcludeInterfaces[%d] = %q, want %q", i, cfg.ExcludeInterfaces[i], v)
+		}
+	}
+}
+
+func TestLoad_ExcludeFiltersEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("YOMINS_EXCLUDE_MOUNTPOINTS", "/proc,/sys")
+	t.Setenv("YOMINS_EXCLUDE_INTERFACES", "docker0")
+
+	cfg, err := loadWithArgs([]string{"--server=http://x.com", "--token=t"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.ExcludeMountpoints) != 2 {
+		t.Errorf("ExcludeMountpoints = %v, want 2 entries", cfg.ExcludeMountpoints)
+	}
+	if len(cfg.ExcludeInterfaces) != 1 || cfg.ExcludeInterfaces[0] != "docker0" {
+		t.Errorf("ExcludeInterfaces = %v, want [docker0]", cfg.ExcludeInterfaces)
+	}
+}
+
+func TestLoad_ExcludeFiltersEmpty(t *testing.T) {
+	clearEnv(t)
+	cfg, err := loadWithArgs([]string{"--server=http://x.com", "--token=t"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ExcludeMountpoints != nil {
+		t.Errorf("ExcludeMountpoints = %v, want nil", cfg.ExcludeMountpoints)
+	}
+	if cfg.ExcludeInterfaces != nil {
+		t.Errorf("ExcludeInterfaces = %v, want nil", cfg.ExcludeInterfaces)
+	}
+}
+
 // clearEnv removes all YOMINS_* environment variables so tests start clean.
 func clearEnv(t *testing.T) {
 	t.Helper()
@@ -127,6 +188,7 @@ func clearEnv(t *testing.T) {
 		"YOMINS_SERVER", "YOMINS_TOKEN", "YOMINS_INTERVAL", "YOMINS_LOG_LEVEL",
 		"YOMINS_HOSTNAME_OVERRIDE", "YOMINS_DISABLE_FILESYSTEMS",
 		"YOMINS_DISABLE_NETWORK", "YOMINS_STATE_DIR",
+		"YOMINS_EXCLUDE_MOUNTPOINTS", "YOMINS_EXCLUDE_INTERFACES",
 	}
 	for _, v := range vars {
 		t.Setenv(v, "") // t.Setenv restores original value on cleanup

@@ -34,7 +34,8 @@ type DiskReader interface {
 
 // DiskCollector collects per-filesystem disk usage metrics.
 type DiskCollector struct {
-	reader DiskReader
+	reader   DiskReader
+	excludes []string
 }
 
 // NewDiskCollector returns a DiskCollector backed by the real OS.
@@ -47,6 +48,18 @@ func NewDiskCollectorWithReader(r DiskReader) *DiskCollector {
 	return &DiskCollector{reader: r}
 }
 
+// NewDiskCollectorWithFilters returns a DiskCollector backed by the real OS that
+// skips the given mountpoints.
+func NewDiskCollectorWithFilters(excludes []string) *DiskCollector {
+	return &DiskCollector{reader: realDiskReader{}, excludes: excludes}
+}
+
+// NewDiskCollectorWithReaderAndExcludes returns a DiskCollector with an injected
+// reader and a mountpoint exclusion list. Intended for use in tests.
+func NewDiskCollectorWithReaderAndExcludes(r DiskReader, excludes []string) *DiskCollector {
+	return &DiskCollector{reader: r, excludes: excludes}
+}
+
 func (c *DiskCollector) Name() string { return "disk" }
 
 func (c *DiskCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, error) {
@@ -57,6 +70,9 @@ func (c *DiskCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, err
 
 	var pts []metrics.MetricPoint
 	for _, p := range partitions {
+		if isExcluded(p.Mountpoint, c.excludes) {
+			continue
+		}
 		usage, err := c.reader.UsageWithContext(ctx, p.Mountpoint)
 		if err != nil {
 			// Skip individual partition errors; they may be transient or permission-related.

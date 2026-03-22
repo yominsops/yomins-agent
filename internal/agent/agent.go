@@ -17,6 +17,7 @@ type Agent struct {
 	transport          transport.Transport
 	self               *collector.SelfMetricsCollector
 	interval           time.Duration
+	shutdownTimeout    time.Duration
 	agentID            string
 	hostname           string
 	version            string
@@ -26,10 +27,11 @@ type Agent struct {
 
 // Config holds the parameters needed to create an Agent.
 type Config struct {
-	Interval           time.Duration
-	AgentID            string
-	Hostname           string
-	Version            string
+	Interval        time.Duration
+	AgentID         string
+	Hostname        string
+	Version         string
+	ShutdownTimeout time.Duration // time allowed for the final push on shutdown; defaults to 10s
 	// OnFirstPushSuccess is called exactly once after the first successful
 	// metrics push.  It may be nil.  Used to commit a staged self-upgrade.
 	OnFirstPushSuccess func()
@@ -37,11 +39,16 @@ type Config struct {
 
 // New creates an Agent with the provided dependencies.
 func New(cfg Config, reg *collector.Registry, tp transport.Transport, self *collector.SelfMetricsCollector) *Agent {
+	st := cfg.ShutdownTimeout
+	if st == 0 {
+		st = 10 * time.Second
+	}
 	return &Agent{
 		registry:           reg,
 		transport:          tp,
 		self:               self,
 		interval:           cfg.Interval,
+		shutdownTimeout:    st,
 		agentID:            cfg.AgentID,
 		hostname:           cfg.Hostname,
 		version:            cfg.Version,
@@ -62,7 +69,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("agent shutting down")
+			slog.Info("agent shutting down, performing final push", "timeout", a.shutdownTimeout)
+			finalCtx, cancel := context.WithTimeout(context.Background(), a.shutdownTimeout)
+			defer cancel()
+			a.tick(finalCtx)
+			slog.Info("final push complete")
 			return ctx.Err()
 		case <-ticker.C:
 			a.tick(ctx)

@@ -23,21 +23,21 @@ The agent already uses HTTPS for all push calls. Operators who explicitly need p
 
 ### Nice-to-have
 
-**iowait CPU metric**
+~~**iowait CPU metric**~~
 
-The spec lists iowait as optional. gopsutil exposes per-CPU time breakdowns via `cpu.TimesWithContext`. Adding a `cpu_iowait_percent` Gauge requires computing the delta between two samples, similar to how total CPU percent is derived.
+~~The spec lists iowait as optional. gopsutil exposes per-CPU time breakdowns via `cpu.TimesWithContext`. Adding a `cpu_iowait_percent` Gauge requires computing the delta between two samples, similar to how total CPU percent is derived.~~ **Done** — `cpu_iowait_percent` (Gauge) is emitted from the second collection onward; the first call is skipped (no delta yet). Always 0 on macOS/BSD where the kernel does not expose iowait.
 
-**Network error/drop counters**
+~~**Network error/drop counters**~~
 
-gopsutil's `net.IOCountersStat` exposes `Errin`, `Errout`, `Dropin`, `Dropout`. These are straightforward additions to the `NetworkCollector`.
+~~gopsutil's `net.IOCountersStat` exposes `Errin`, `Errout`, `Dropin`, `Dropout`. These are straightforward additions to the `NetworkCollector`.~~ **Done** — `network_errors_in_total`, `network_errors_out_total`, `network_drops_in_total`, `network_drops_out_total` (all Counter) are now emitted per interface.
 
-**Configurable filesystem filter**
+~~**Configurable filesystem filter**~~
 
-Currently all physical partitions are collected. A future `--exclude-mountpoints` flag (accepting a comma-separated list or regex) would allow operators to exclude noisy or irrelevant mounts.
+~~Currently all physical partitions are collected. A future `--exclude-mountpoints` flag (accepting a comma-separated list or regex) would allow operators to exclude noisy or irrelevant mounts.~~ **Done** — `--exclude-mountpoints` flag (env: `YOMINS_EXCLUDE_MOUNTPOINTS`) accepts a comma-separated list of mountpoints to skip.
 
-**Configurable network interface filter**
+~~**Configurable network interface filter**~~
 
-Similar to filesystems, a `--exclude-interfaces` flag to skip specific interfaces by name (e.g. virtual bridges, VPN tunnels).
+~~Similar to filesystems, a `--exclude-interfaces` flag to skip specific interfaces by name (e.g. virtual bridges, VPN tunnels).~~ **Done** — `--exclude-interfaces` flag (env: `YOMINS_EXCLUDE_INTERFACES`) accepts a comma-separated list of interface names to skip; loopback (`lo`) is always excluded regardless.
 
 **Structured log format option**
 
@@ -47,9 +47,9 @@ Add a `--log-format json` flag for log aggregation pipelines. The `slog.JSONHand
 
 ~~The Dockerfile currently builds for the host architecture only. A multi-platform image (`--platform linux/amd64,linux/arm64`) requires a `docker buildx` pipeline, typically set up in CI.~~ **Done** — `release.yml` uses `docker buildx` to build and push a multi-platform image.
 
-**Graceful shutdown with final push**
+~~**Graceful shutdown with final push**~~
 
-When the agent receives `SIGTERM` it currently exits after the context is cancelled. A short grace-period push of the final snapshot (including self-metrics) would give operators one last data point before the agent stops.
+~~When the agent receives `SIGTERM` it currently exits after the context is cancelled. A short grace-period push of the final snapshot (including self-metrics) would give operators one last data point before the agent stops.~~ **Done** — on `SIGTERM`/`SIGINT` the agent performs one final collection and push (10 s budget, fits within systemd's `TimeoutStopSec=15s`) before exiting.
 
 **Health check endpoint (optional)**
 
@@ -71,9 +71,9 @@ A minimal HTTP server on localhost (e.g. `:9101/healthz`) that returns 200 when 
 | Agent | GitHub release with checksums | ~~High~~ done |
 | Agent | ~~Signed release artifacts~~ | ~~Medium~~ done |
 | Agent | ~~Self-upgrade mechanism~~ | ~~Medium~~ done |
-| Agent | iowait and network error metrics | Low |
-| Agent | Configurable filesystem/interface filters | Low |
-| Agent | Graceful shutdown with final push | Low |
+| Agent | ~~iowait and network error metrics~~ | ~~Low~~ done |
+| Agent | ~~Configurable filesystem/interface filters~~ | ~~Low~~ done |
+| Agent | ~~Graceful shutdown with final push~~ | ~~Low~~ done |
 | Agent | Health check endpoint | Low |
 
 ---

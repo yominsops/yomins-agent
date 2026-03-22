@@ -14,6 +14,10 @@ type IOCountersStat struct {
 	BytesRecv   uint64
 	PacketsSent uint64
 	PacketsRecv uint64
+	Errin       uint64
+	Errout      uint64
+	Dropin      uint64
+	Dropout     uint64
 }
 
 // NetworkReader abstracts the gopsutil network I/O call.
@@ -23,19 +27,36 @@ type NetworkReader interface {
 
 // NetworkCollector collects per-interface network I/O counters.
 // Counters are exposed as Prometheus Counter type (monotonically increasing since boot).
-// The loopback interface ("lo") is filtered out.
+// The loopback interface ("lo") is always filtered out unless a custom excludes list
+// is provided via NewNetworkCollectorWithFilters.
 type NetworkCollector struct {
-	reader NetworkReader
+	reader   NetworkReader
+	excludes []string
 }
 
 // NewNetworkCollector returns a NetworkCollector backed by the real OS.
+// The loopback interface "lo" is excluded by default.
 func NewNetworkCollector() *NetworkCollector {
-	return &NetworkCollector{reader: realNetworkReader{}}
+	return &NetworkCollector{reader: realNetworkReader{}, excludes: []string{"lo"}}
 }
 
 // NewNetworkCollectorWithReader returns a NetworkCollector with an injected reader.
+// The loopback interface "lo" is excluded by default.
 func NewNetworkCollectorWithReader(r NetworkReader) *NetworkCollector {
-	return &NetworkCollector{reader: r}
+	return &NetworkCollector{reader: r, excludes: []string{"lo"}}
+}
+
+// NewNetworkCollectorWithFilters returns a NetworkCollector backed by the real OS
+// that skips the interfaces in excludes. The caller is responsible for including
+// "lo" in the list if loopback should be excluded.
+func NewNetworkCollectorWithFilters(excludes []string) *NetworkCollector {
+	return &NetworkCollector{reader: realNetworkReader{}, excludes: excludes}
+}
+
+// NewNetworkCollectorWithReaderAndExcludes returns a NetworkCollector with an
+// injected reader and a custom interface exclusion list. Intended for use in tests.
+func NewNetworkCollectorWithReaderAndExcludes(r NetworkReader, excludes []string) *NetworkCollector {
+	return &NetworkCollector{reader: r, excludes: excludes}
 }
 
 func (c *NetworkCollector) Name() string { return "network" }
@@ -48,7 +69,7 @@ func (c *NetworkCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, 
 
 	var pts []metrics.MetricPoint
 	for _, iface := range counters {
-		if iface.Name == "lo" {
+		if isExcluded(iface.Name, c.excludes) {
 			continue
 		}
 		lbls := map[string]string{"interface": iface.Name}
@@ -57,6 +78,10 @@ func (c *NetworkCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, 
 			metrics.MetricPoint{Name: "network_bytes_recv_total", Help: "Total bytes received since boot", Type: metrics.Counter, Value: float64(iface.BytesRecv), Labels: lbls},
 			metrics.MetricPoint{Name: "network_packets_sent_total", Help: "Total packets sent since boot", Type: metrics.Counter, Value: float64(iface.PacketsSent), Labels: lbls},
 			metrics.MetricPoint{Name: "network_packets_recv_total", Help: "Total packets received since boot", Type: metrics.Counter, Value: float64(iface.PacketsRecv), Labels: lbls},
+			metrics.MetricPoint{Name: "network_errors_in_total", Help: "Total inbound network errors since boot", Type: metrics.Counter, Value: float64(iface.Errin), Labels: lbls},
+			metrics.MetricPoint{Name: "network_errors_out_total", Help: "Total outbound network errors since boot", Type: metrics.Counter, Value: float64(iface.Errout), Labels: lbls},
+			metrics.MetricPoint{Name: "network_drops_in_total", Help: "Total inbound packets dropped since boot", Type: metrics.Counter, Value: float64(iface.Dropin), Labels: lbls},
+			metrics.MetricPoint{Name: "network_drops_out_total", Help: "Total outbound packets dropped since boot", Type: metrics.Counter, Value: float64(iface.Dropout), Labels: lbls},
 		)
 	}
 

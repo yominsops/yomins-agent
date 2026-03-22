@@ -21,6 +21,10 @@ func (realNetworkReader) IOCountersWithContext(ctx context.Context, pernic bool)
 			BytesRecv:   c.BytesRecv,
 			PacketsSent: c.PacketsSent,
 			PacketsRecv: c.PacketsRecv,
+			Errin:       c.Errin,
+			Errout:      c.Errout,
+			Dropin:      c.Dropin,
+			Dropout:     c.Dropout,
 		}
 	}
 	return result, nil

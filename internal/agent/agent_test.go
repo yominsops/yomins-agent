@@ -96,6 +96,40 @@ func TestAgent_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestAgent_GracefulShutdownDoesOneFinalPush(t *testing.T) {
+	tp := &mockTransport{}
+	mc := &mockCollector{name: "test", pts: []metrics.MetricPoint{{Name: "m1", Value: 1}}}
+
+	reg := collector.NewRegistry(mc)
+	self := collector.NewSelfMetricsCollector("test-id", time.Now())
+	cfg := agent.Config{
+		Interval:        1 * time.Hour, // long interval: only the immediate tick fires
+		AgentID:         "test-id",
+		Hostname:        "test-host",
+		Version:         "0.0.1",
+		ShutdownTimeout: 2 * time.Second,
+	}
+	a := agent.New(cfg, reg, tp, self)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel shortly after the initial tick has had time to complete.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := a.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Run() err = %v, want context.Canceled", err)
+	}
+
+	// 1 initial tick + 1 final push on shutdown = at least 2 push calls.
+	count := atomic.LoadInt32(&tp.pushCount)
+	if count < 2 {
+		t.Errorf("pushCount = %d, want >= 2 (initial + final push)", count)
+	}
+}
+
 func TestAgent_CollectorErrorIsolated(t *testing.T) {
 	tp := &mockTransport{}
 	good := &mockCollector{name: "good", pts: []metrics.MetricPoint{{Name: "m1", Value: 1}}}

@@ -81,6 +81,52 @@ func TestDiskCollector_PartitionsError(t *testing.T) {
 	}
 }
 
+func TestDiskCollector_ExcludeMountpoint(t *testing.T) {
+	mock := &mockDiskReader{
+		partitions: []collector.PartitionStat{
+			{Mountpoint: "/", Fstype: "ext4", Device: "/dev/sda1"},
+			{Mountpoint: "/tmp", Fstype: "tmpfs", Device: "tmpfs"},
+		},
+		usage: map[string]*collector.DiskUsageStat{
+			"/":    {Total: 100, UsedPercent: 10},
+			"/tmp": {Total: 50, UsedPercent: 5},
+		},
+	}
+	c := collector.NewDiskCollectorWithReaderAndExcludes(mock, []string{"/tmp"})
+	pts, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	// 8 metrics for "/" only; "/tmp" is excluded
+	if len(pts) != 8 {
+		t.Errorf("points count = %d, want 8", len(pts))
+	}
+	for _, p := range pts {
+		if p.Labels["mountpoint"] == "/tmp" {
+			t.Error("excluded mountpoint /tmp should not appear in results")
+		}
+	}
+}
+
+func TestDiskCollector_ExcludeAll(t *testing.T) {
+	mock := &mockDiskReader{
+		partitions: []collector.PartitionStat{
+			{Mountpoint: "/", Fstype: "ext4"},
+		},
+		usage: map[string]*collector.DiskUsageStat{
+			"/": {Total: 100},
+		},
+	}
+	c := collector.NewDiskCollectorWithReaderAndExcludes(mock, []string{"/"})
+	pts, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(pts) != 0 {
+		t.Errorf("points count = %d, want 0 (all excluded)", len(pts))
+	}
+}
+
 func TestDiskCollector_UsageErrorSkipped(t *testing.T) {
 	// Individual partition usage errors are skipped; others still collected.
 	mock := &mockDiskReader{

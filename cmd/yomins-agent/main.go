@@ -86,10 +86,11 @@ func run() error {
 
 	// 8. Create and run agent.
 	ag := agent.New(agent.Config{
-		Interval: cfg.Interval,
-		AgentID:  id.AgentID,
-		Hostname: hostname,
-		Version:  version.Version,
+		Interval:        cfg.Interval,
+		AgentID:         id.AgentID,
+		Hostname:        hostname,
+		Version:         version.Version,
+		ShutdownTimeout: 10 * time.Second,
 		OnFirstPushSuccess: func() {
 			if err := upgradeManager.Commit(); err != nil {
 				slog.Warn("upgrade commit failed", "error", err)
@@ -110,10 +111,20 @@ func buildCollectors(cfg *config.Config) []collector.Collector {
 		collector.NewSystemCollector(),
 	}
 	if !cfg.DisableFilesystems {
-		collectors = append(collectors, collector.NewDiskCollector())
+		if len(cfg.ExcludeMountpoints) > 0 {
+			collectors = append(collectors, collector.NewDiskCollectorWithFilters(cfg.ExcludeMountpoints))
+		} else {
+			collectors = append(collectors, collector.NewDiskCollector())
+		}
 	}
 	if !cfg.DisableNetwork {
-		collectors = append(collectors, collector.NewNetworkCollector())
+		if len(cfg.ExcludeInterfaces) > 0 {
+			// Always prepend "lo" so loopback remains excluded regardless of the user list.
+			excludes := append([]string{"lo"}, cfg.ExcludeInterfaces...)
+			collectors = append(collectors, collector.NewNetworkCollectorWithFilters(excludes))
+		} else {
+			collectors = append(collectors, collector.NewNetworkCollector())
+		}
 	}
 	return collectors
 }

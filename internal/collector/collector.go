@@ -15,6 +15,17 @@ type Collector interface {
 	Collect(ctx context.Context) ([]metrics.MetricPoint, error)
 }
 
+// isExcluded returns true if name is present in the excludes list.
+// The comparison is exact (case-sensitive).
+func isExcluded(name string, excludes []string) bool {
+	for _, ex := range excludes {
+		if ex == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Registry holds a set of enabled Collectors.
 type Registry struct {
 	collectors []Collector

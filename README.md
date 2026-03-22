@@ -23,6 +23,7 @@ The agent identifies itself with a project-scoped token. The server resolves the
 | Metric | Type | Description |
 |--------|------|-------------|
 | `cpu_usage_percent` | Gauge | Total CPU usage, 0–100 |
+| `cpu_iowait_percent` | Gauge | CPU time spent waiting for I/O, 0–100 (absent on first collection; always 0 on macOS/BSD) |
 
 ### Memory
 | Metric | Type | Description |
@@ -55,6 +56,10 @@ The agent identifies itself with a project-scoped token. The server resolves the
 | `network_bytes_recv_total` | Counter | Bytes received since boot |
 | `network_packets_sent_total` | Counter | Packets sent since boot |
 | `network_packets_recv_total` | Counter | Packets received since boot |
+| `network_errors_in_total` | Counter | Inbound errors since boot |
+| `network_errors_out_total` | Counter | Outbound errors since boot |
+| `network_drops_in_total` | Counter | Inbound packets dropped since boot |
+| `network_drops_out_total` | Counter | Outbound packets dropped since boot |
 
 ### System
 | Metric | Type | Description |
@@ -87,8 +92,10 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--interval` | `YOMINS_INTERVAL` | `60s` | Push interval (e.g. `30s`, `2m`) |
 | `--log-level` | `YOMINS_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `--hostname-override` | `YOMINS_HOSTNAME_OVERRIDE` | *(auto-detected)* | Override reported hostname |
-| `--disable-filesystems` | `YOMINS_DISABLE_FILESYSTEMS` | `false` | Disable disk metrics |
-| `--disable-network` | `YOMINS_DISABLE_NETWORK` | `false` | Disable network metrics |
+| `--disable-filesystems` | `YOMINS_DISABLE_FILESYSTEMS` | `false` | Disable disk metrics entirely |
+| `--disable-network` | `YOMINS_DISABLE_NETWORK` | `false` | Disable network metrics entirely |
+| `--exclude-mountpoints` | `YOMINS_EXCLUDE_MOUNTPOINTS` | *(none)* | Comma-separated mountpoints to skip (e.g. `/proc,/sys,/dev/shm`) |
+| `--exclude-interfaces` | `YOMINS_EXCLUDE_INTERFACES` | *(none)* | Comma-separated interfaces to skip (e.g. `docker0,virbr0`); loopback is always excluded |
 | `--state-dir` | `YOMINS_STATE_DIR` | `/var/lib/yomins-agent` | Persistent state directory |
 | `--disable-auto-upgrade` | `YOMINS_DISABLE_AUTO_UPGRADE` | `false` | Disable automatic self-upgrade |
 | `--auto-upgrade-interval` | `YOMINS_AUTO_UPGRADE_INTERVAL` | `24h` | How often to check for a newer version |
@@ -113,6 +120,7 @@ On first start the agent generates a UUID (`agent_id`) and persists it to `$stat
 - Retries: exponential backoff starting at 1 s, capped at 60 s, with a total budget of 90% of the collection interval (prevents retry bleed into the next tick).
 - Permanent errors (HTTP 4xx except 429) are not retried.
 - Push failures are logged and counted in `agent_push_error_total` but do not crash the agent.
+- On `SIGTERM`/`SIGINT` the agent performs one final collection and push (10 s budget) before exiting, ensuring no metric gap on planned restarts or upgrades.
 
 ## Docker
 

@@ -11,18 +11,20 @@ import (
 
 // Config holds all agent runtime configuration.
 type Config struct {
-	Version            bool
-	Server             string
-	Token              string
-	Interval           time.Duration
-	LogLevel           string
-	HostnameOverride   string
-	DisableFilesystems bool
-	DisableNetwork     bool
+	Version             bool
+	Server              string
+	Token               string
+	Interval            time.Duration
+	LogLevel            string
+	HostnameOverride    string
+	DisableFilesystems  bool
+	DisableNetwork      bool
 	InsecureSkipVerify  bool
 	StateDir            string
 	DisableAutoUpgrade  bool
 	AutoUpgradeInterval time.Duration
+	ExcludeMountpoints  []string
+	ExcludeInterfaces   []string
 }
 
 // Load parses configuration from CLI flags and environment variables.
@@ -44,6 +46,11 @@ func Load() (*Config, error) {
 	fs.BoolVar(&cfg.DisableAutoUpgrade, "disable-auto-upgrade", false, "Disable automatic self-upgrade check (YOMINS_DISABLE_AUTO_UPGRADE)")
 	fs.DurationVar(&cfg.AutoUpgradeInterval, "auto-upgrade-interval", 24*time.Hour, "How often to check for a newer version (YOMINS_AUTO_UPGRADE_INTERVAL)")
 
+	var excludeMountpointsRaw string
+	var excludeInterfacesRaw string
+	fs.StringVar(&excludeMountpointsRaw, "exclude-mountpoints", "", "Comma-separated mountpoints to exclude from disk metrics (YOMINS_EXCLUDE_MOUNTPOINTS)")
+	fs.StringVar(&excludeInterfacesRaw, "exclude-interfaces", "", "Comma-separated network interfaces to exclude (YOMINS_EXCLUDE_INTERFACES)")
+
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, fmt.Errorf("parse flags: %w", err)
 	}
@@ -56,6 +63,21 @@ func Load() (*Config, error) {
 
 	// Overlay environment variables only for flags not set on the CLI.
 	overlayEnv(cfg, explicitFlags)
+
+	// Apply env vars for CSV fields not set on the CLI.
+	if !explicitFlags["exclude-mountpoints"] {
+		if v := os.Getenv("YOMINS_EXCLUDE_MOUNTPOINTS"); v != "" {
+			excludeMountpointsRaw = v
+		}
+	}
+	if !explicitFlags["exclude-interfaces"] {
+		if v := os.Getenv("YOMINS_EXCLUDE_INTERFACES"); v != "" {
+			excludeInterfacesRaw = v
+		}
+	}
+
+	cfg.ExcludeMountpoints = parseCSV(excludeMountpointsRaw)
+	cfg.ExcludeInterfaces = parseCSV(excludeInterfacesRaw)
 
 	return cfg, nil
 }
@@ -139,4 +161,19 @@ func (c *Config) Validate() error {
 func isTruthy(v string) bool {
 	v = strings.ToLower(strings.TrimSpace(v))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+// parseCSV splits a comma-separated string into trimmed, non-empty tokens.
+func parseCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			result = append(result, t)
+		}
+	}
+	return result
 }
