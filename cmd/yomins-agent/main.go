@@ -31,6 +31,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	if cfg.Version {
+		fmt.Println(version.Info())
+		return nil
+	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
