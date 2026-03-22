@@ -14,7 +14,7 @@ The agent binary is functional for local testing but several items are needed be
 
 - ~~CI workflow (GitHub Actions or equivalent) that runs `go test ./...` on every push.~~ **Done** (`.github/workflows/ci.yml`)
 - ~~Cross-compilation targets: `linux/amd64` and `linux/arm64` as static binaries (`CGO_ENABLED=0`).~~ **Done** (`release.yml`)
-- ~~Automated GitHub release with checksums (`sha256sum`).~~ **Done** (`release.yml` — SHA256 checksums generated; signed manifest still missing, see below)
+- ~~Automated GitHub release with checksums (`sha256sum`).~~ **Done** (`release.yml` — SHA256 checksums generated and signed with Sigstore keyless signing)
 - ~~Docker image build and push to a container registry (e.g. `ghcr.io/yominsops/agent`).~~ **Done** (`release.yml` — multi-platform via `docker buildx`)
 
 **TLS enforcement**
@@ -69,7 +69,7 @@ The agent should be able to upgrade itself to the latest released version withou
 | Agent | One-command install script | ~~High~~ done |
 | Agent | Docker image + arm64 multi-platform | ~~High~~ done |
 | Agent | GitHub release with checksums | ~~High~~ done |
-| Agent | Signed release artifacts | Medium |
+| Agent | ~~Signed release artifacts~~ | ~~Medium~~ done |
 | Agent | Self-upgrade mechanism | Medium |
 | Agent | iowait and network error metrics | Low |
 | Agent | Configurable filesystem/interface filters | Low |

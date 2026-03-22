@@ -167,11 +167,38 @@ git tag v1.2.3 && git push origin v1.2.3
 
 Each release includes:
 - Static binaries for `linux/amd64` and `linux/arm64`
-- SHA-256 checksums for each binary
+- SHA-256 checksums for each binary (`checksums.txt`)
+- A Sigstore bundle (`checksums.txt.bundle`) for signature verification
 - The systemd service unit file
 - Docker image pushed to `ghcr.io/yominsops/yomins-agent`
 
 CI runs on every push and pull request to `main` (tests + lint). Releases are only created on tag pushes.
+
+### Verifying a release
+
+Signatures use [Sigstore](https://www.sigstore.dev/) keyless signing — no key to trust or rotate. The signing identity is the GitHub Actions workflow itself.
+
+Install [cosign](https://github.com/sigstore/cosign), then:
+
+```bash
+VERSION=v1.2.3
+
+# Download the checksums file and its bundle
+curl -fsSL "https://github.com/yominsops/yomins-agent/releases/download/${VERSION}/checksums.txt" -o checksums.txt
+curl -fsSL "https://github.com/yominsops/yomins-agent/releases/download/${VERSION}/checksums.txt.bundle" -o checksums.txt.bundle
+
+# Verify the signature
+cosign verify-blob \
+  --bundle checksums.txt.bundle \
+  --certificate-identity "https://github.com/yominsops/yomins-agent/.github/workflows/release.yml@refs/tags/${VERSION}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+
+# Verify the binary hash
+sha256sum --check --ignore-missing checksums.txt
+```
+
+A passing `cosign verify-blob` confirms the checksum file was produced by the official release workflow for that exact tag. The binary hash check then confirms the downloaded binary matches.
 
 ## Building from source
 

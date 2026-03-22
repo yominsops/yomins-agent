@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write   # required for Sigstore keyless signing (OIDC token)
 
 jobs:
   # -------------------------------------------------------------------------
@@ -87,6 +88,15 @@ jobs:
           name: release-binaries
           path: dist/
 
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign checksums with Sigstore
+        run: |
+          cosign sign-blob \
+            --yes \
+            --bundle dist/checksums.txt.bundle \
+            dist/checksums.txt
+
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -99,6 +109,7 @@ jobs:
             dist/yomins-agent-linux-amd64.sha256 \
             dist/yomins-agent-linux-arm64.sha256 \
             dist/checksums.txt \
+            dist/checksums.txt.bundle \
             dist/yomins-agent.service
 
   # -------------------------------------------------------------------------
