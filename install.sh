@@ -352,7 +352,8 @@ main() {
 
     [[ -n "$AGENT_TOKEN" ]] \
         || die "Could not read YOMINS_TOKEN from ${CONFIG_DIR}/env. Pass --token explicitly."
-    [[ "$AGENT_SERVER" == https://* ]] || [[ "$ALLOW_HTTP" == true ]] \
+    [[ "$IS_UPGRADE" == true ]] \
+        || [[ "$AGENT_SERVER" == https://* ]] || [[ "$ALLOW_HTTP" == true ]] \
         || die "--server must use HTTPS. Got: ${AGENT_SERVER}"
 
     require_cmd curl
