@@ -224,7 +224,14 @@ confirm() {
     fi
     printf "\n"
     local prompt="Proceed with ${IS_UPGRADE:+upgrade}${IS_UPGRADE:-installation}? [y/N] "
-    read -rp "$prompt" answer
+    if [[ -t 0 ]]; then
+        read -rp "$prompt" answer
+    elif [[ -e /dev/tty ]]; then
+        read -rp "$prompt" answer </dev/tty
+    else
+        warn "Non-interactive mode — skipping confirmation."
+        answer="y"
+    fi
     [[ "$answer" =~ ^[Yy]$ ]] || { info "Cancelled."; exit 0; }
 }
 
