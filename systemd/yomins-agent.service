@@ -3,6 +3,8 @@ Description=YominsOps Metrics Agent
 Documentation=https://docs.yominsops.com/agent
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=120s
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -36,8 +38,6 @@ ReadWritePaths=/var/lib/yomins-agent
 # also triggers a restart, allowing apply-upgrade.sh to apply the new binary.
 Restart=always
 RestartSec=10s
-StartLimitIntervalSec=120s
-StartLimitBurst=5
 
 # Give the agent time to flush on shutdown.
 TimeoutStopSec=15s
