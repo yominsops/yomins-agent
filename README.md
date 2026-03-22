@@ -90,6 +90,8 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--disable-filesystems` | `YOMINS_DISABLE_FILESYSTEMS` | `false` | Disable disk metrics |
 | `--disable-network` | `YOMINS_DISABLE_NETWORK` | `false` | Disable network metrics |
 | `--state-dir` | `YOMINS_STATE_DIR` | `/var/lib/yomins-agent` | Persistent state directory |
+| `--disable-auto-upgrade` | `YOMINS_DISABLE_AUTO_UPGRADE` | `false` | Disable automatic self-upgrade |
+| `--auto-upgrade-interval` | `YOMINS_AUTO_UPGRADE_INTERVAL` | `24h` | How often to check for a newer version |
 | `--insecure-skip-verify` | — | `false` | Skip TLS verification (**dev only**) |
 
 ## Security model
@@ -140,6 +142,21 @@ curl http://localhost:8080/install.sh
 
 No HTTPS or certificates are needed — a reverse proxy handles TLS termination in production.
 
+## Self-upgrade
+
+The agent upgrades itself automatically. On startup and every `--auto-upgrade-interval` (default: 24 h) it checks the GitHub Releases API. When a newer version is found:
+
+1. The binary and its SHA-256 checksum are downloaded and the hash is verified.
+2. The new binary is staged in the agent's state directory (`/var/lib/yomins-agent/upgrade/`).
+3. The agent exits cleanly; systemd restarts it.
+4. On the next start a privileged pre-start script (`apply-upgrade.sh`) atomically replaces `/usr/local/bin/yomins-agent` before the agent process launches.
+
+**Automatic rollback:** if the new binary crashes before successfully pushing metrics for the first time, `apply-upgrade.sh` detects the uncommitted upgrade on the following restart and restores the backup automatically.
+
+To disable auto-upgrade set `YOMINS_DISABLE_AUTO_UPGRADE=true` in `/etc/yomins-agent/env`.
+
+Dev builds (`version = "dev"`) never trigger an upgrade check.
+
 ## Project layout
 
 ```
@@ -152,7 +169,8 @@ internal/
   collector/            — Collector interface, Registry, and per-subsystem collectors
   transport/            — Transport interface and HTTP push implementation
   agent/                — orchestration loop (collect → encode → push)
-systemd/                — systemd service unit
+  upgrade/              — self-upgrade: version check, download, staging, rollback
+systemd/                — systemd service unit and apply-upgrade.sh helper script
 Dockerfile
 Makefile
 ```
@@ -167,9 +185,9 @@ git tag v1.2.3 && git push origin v1.2.3
 
 Each release includes:
 - Static binaries for `linux/amd64` and `linux/arm64`
-- SHA-256 checksums for each binary (`checksums.txt`)
-- A Sigstore bundle (`checksums.txt.bundle`) for signature verification
-- The systemd service unit file
+- Per-binary SHA-256 checksum sidecars (`*.sha256`) used by the self-upgrade mechanism
+- A unified `checksums.txt` and its Sigstore bundle (`checksums.txt.bundle`) for manual verification
+- The systemd service unit file and the `apply-upgrade.sh` helper script
 - Docker image pushed to `ghcr.io/yominsops/yomins-agent`
 
 CI runs on every push and pull request to `main` (tests + lint). Releases are only created on tag pushes.

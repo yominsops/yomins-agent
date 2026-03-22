@@ -13,6 +13,10 @@ Group=yomins-agent
 # Create it with: echo "YOMINS_SERVER=...\nYOMINS_TOKEN=..." > /etc/yomins-agent/env
 EnvironmentFile=-/etc/yomins-agent/env
 
+# Run as root (+ prefix) before the main process starts.
+# Applies a staged upgrade or rolls back a failed one.
+ExecStartPre=+/usr/local/lib/yomins-agent/apply-upgrade.sh
+
 ExecStart=/usr/local/bin/yomins-agent
 
 # systemd automatically creates /var/lib/yomins-agent and sets ownership
@@ -28,9 +32,11 @@ ProtectHome=true
 ReadOnlyPaths=/
 ReadWritePaths=/var/lib/yomins-agent
 
-Restart=on-failure
+# Restart=always so that a clean exit (os.Exit(0)) after staging an upgrade
+# also triggers a restart, allowing apply-upgrade.sh to apply the new binary.
+Restart=always
 RestartSec=10s
-StartLimitIntervalSec=60s
+StartLimitIntervalSec=120s
 StartLimitBurst=5
 
 # Give the agent time to flush on shutdown.

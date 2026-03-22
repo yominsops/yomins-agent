@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/yominsops/yomins-agent/internal/collector"
@@ -12,33 +13,39 @@ import (
 
 // Agent orchestrates the collection → encode → push pipeline on a ticker.
 type Agent struct {
-	registry  *collector.Registry
-	transport transport.Transport
-	self      *collector.SelfMetricsCollector
-	interval  time.Duration
-	agentID   string
-	hostname  string
-	version   string
+	registry           *collector.Registry
+	transport          transport.Transport
+	self               *collector.SelfMetricsCollector
+	interval           time.Duration
+	agentID            string
+	hostname           string
+	version            string
+	onFirstPushSuccess func()
+	commitOnce         sync.Once
 }
 
 // Config holds the parameters needed to create an Agent.
 type Config struct {
-	Interval time.Duration
-	AgentID  string
-	Hostname string
-	Version  string
+	Interval           time.Duration
+	AgentID            string
+	Hostname           string
+	Version            string
+	// OnFirstPushSuccess is called exactly once after the first successful
+	// metrics push.  It may be nil.  Used to commit a staged self-upgrade.
+	OnFirstPushSuccess func()
 }
 
 // New creates an Agent with the provided dependencies.
 func New(cfg Config, reg *collector.Registry, tp transport.Transport, self *collector.SelfMetricsCollector) *Agent {
 	return &Agent{
-		registry:  reg,
-		transport: tp,
-		self:      self,
-		interval:  cfg.Interval,
-		agentID:   cfg.AgentID,
-		hostname:  cfg.Hostname,
-		version:   cfg.Version,
+		registry:           reg,
+		transport:          tp,
+		self:               self,
+		interval:           cfg.Interval,
+		agentID:            cfg.AgentID,
+		hostname:           cfg.Hostname,
+		version:            cfg.Version,
+		onFirstPushSuccess: cfg.OnFirstPushSuccess,
 	}
 }
 
@@ -103,5 +110,10 @@ func (a *Agent) tick(ctx context.Context) {
 			"collect_ms", collectDuration.Milliseconds(),
 			"push_ms", pushDuration.Milliseconds(),
 		)
+		a.commitOnce.Do(func() {
+			if a.onFirstPushSuccess != nil {
+				a.onFirstPushSuccess()
+			}
+		})
 	}
 }

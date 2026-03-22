@@ -14,6 +14,7 @@ import (
 	"github.com/yominsops/yomins-agent/internal/config"
 	"github.com/yominsops/yomins-agent/internal/identity"
 	"github.com/yominsops/yomins-agent/internal/transport"
+	"github.com/yominsops/yomins-agent/internal/upgrade"
 	"github.com/yominsops/yomins-agent/internal/version"
 )
 
@@ -46,9 +47,23 @@ func run() error {
 		}
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	// 4. Load or generate persistent agent identity.
 	id := identity.Load(cfg.StateDir)
 	slog.Info("agent identity", "agent_id", id.AgentID)
+
+	// 4b. Check for available upgrades and stage if found.
+	// RunOnce calls os.Exit(0) if an upgrade is staged; otherwise it returns
+	// quickly (< 15s timeout) and normal startup continues.
+	upgradeManager := upgrade.NewManager(upgrade.Config{
+		StateDir:       cfg.StateDir,
+		CurrentVersion: version.Version,
+		Interval:       cfg.AutoUpgradeInterval,
+		Disabled:       cfg.DisableAutoUpgrade,
+	})
+	upgradeManager.RunOnce(ctx)
 
 	// 5. Build collector registry.
 	collectors := buildCollectors(cfg)
@@ -71,10 +86,14 @@ func run() error {
 		AgentID:  id.AgentID,
 		Hostname: hostname,
 		Version:  version.Version,
+		OnFirstPushSuccess: func() {
+			if err := upgradeManager.Commit(); err != nil {
+				slog.Warn("upgrade commit failed", "error", err)
+			}
+		},
 	}, reg, tp, self)
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	upgradeManager.RunPeriodic(ctx)
 
 	return ag.Run(ctx)
 }

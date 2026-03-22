@@ -27,6 +27,7 @@ ALLOW_HTTP=false            # dev/testing only: bypass HTTPS requirement
 BINARY_NAME="yomins-agent"
 SERVICE_NAME="yomins-agent"
 INSTALL_DIR="/usr/local/bin"
+UPGRADE_LIB_DIR="/usr/local/lib/yomins-agent"
 CONFIG_DIR="/etc/yomins-agent"
 STATE_DIR="/var/lib/yomins-agent"
 SYSTEMD_DIR="/etc/systemd/system"
@@ -211,6 +212,25 @@ EOF
     chown root:root "$env_file"
 }
 
+install_upgrade_script() {
+    info "Installing upgrade helper script to ${UPGRADE_LIB_DIR}/apply-upgrade.sh..."
+    mkdir -p "$UPGRADE_LIB_DIR"
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local local_script="${script_dir}/systemd/apply-upgrade.sh"
+
+    if [[ -f "$local_script" ]]; then
+        install -m 755 "$local_script" "${UPGRADE_LIB_DIR}/apply-upgrade.sh"
+    else
+        local script_url="${RELEASES_BASE}/download/${AGENT_VERSION}/apply-upgrade.sh"
+        curl -fsSL "$script_url" -o "${UPGRADE_LIB_DIR}/apply-upgrade.sh" \
+            || die "Failed to download apply-upgrade.sh from ${script_url}"
+        chmod 755 "${UPGRADE_LIB_DIR}/apply-upgrade.sh"
+    fi
+    chown root:root "${UPGRADE_LIB_DIR}/apply-upgrade.sh"
+}
+
 install_service() {
     info "Installing systemd unit to ${SERVICE_FILE}..."
 
@@ -232,6 +252,11 @@ install_service() {
     mkdir -p "$STATE_DIR"
     chown "${SERVICE_NAME}:${SERVICE_NAME}" "$STATE_DIR"
     chmod 700 "$STATE_DIR"
+
+    # Create the upgrade staging directory owned by the service user.
+    mkdir -p "${STATE_DIR}/upgrade"
+    chown "${SERVICE_NAME}:${SERVICE_NAME}" "${STATE_DIR}/upgrade"
+    chmod 700 "${STATE_DIR}/upgrade"
 
     systemctl daemon-reload
     systemctl enable --now "$SERVICE_NAME"
@@ -280,6 +305,7 @@ main() {
     download_binary
     ensure_user
     install_binary
+    install_upgrade_script
     write_config
     install_service
     verify_running

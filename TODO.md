@@ -55,9 +55,9 @@ When the agent receives `SIGTERM` it currently exits after the context is cancel
 
 A minimal HTTP server on localhost (e.g. `:9101/healthz`) that returns 200 when the last push succeeded within 2× the interval. This enables Kubernetes liveness probes and systemd watchdog integration without exposing metrics externally.
 
-**Self-upgrade mechanism**
+~~**Self-upgrade mechanism**~~
 
-The agent should be able to upgrade itself to the latest released version without requiring operator intervention. On startup (or via a dedicated flag/signal), the agent checks the GitHub Releases API for a newer version, downloads the binary for the current platform, verifies the SHA256 checksum, atomically replaces itself on disk, and restarts via systemd (or prompts the operator to restart). This is especially useful for long-running deployments managed by systemd where manual upgrades are inconvenient.
+~~The agent should be able to upgrade itself to the latest released version without requiring operator intervention. On startup (or via a dedicated flag/signal), the agent checks the GitHub Releases API for a newer version, downloads the binary for the current platform, verifies the SHA256 checksum, atomically replaces itself on disk, and restarts via systemd (or prompts the operator to restart). This is especially useful for long-running deployments managed by systemd where manual upgrades are inconvenient.~~ **Done** — implemented via a two-phase approach: the unprivileged agent stages the new binary (download + SHA256 verification), exits, and a root-owned `ExecStartPre=+` systemd script applies it atomically. Automatic rollback if the new binary fails to commit its first successful push. Configurable via `--disable-auto-upgrade` and `--auto-upgrade-interval`.
 
 ------
 
@@ -70,7 +70,7 @@ The agent should be able to upgrade itself to the latest released version withou
 | Agent | Docker image + arm64 multi-platform | ~~High~~ done |
 | Agent | GitHub release with checksums | ~~High~~ done |
 | Agent | ~~Signed release artifacts~~ | ~~Medium~~ done |
-| Agent | Self-upgrade mechanism | Medium |
+| Agent | ~~Self-upgrade mechanism~~ | ~~Medium~~ done |
 | Agent | iowait and network error metrics | Low |
 | Agent | Configurable filesystem/interface filters | Low |
 | Agent | Graceful shutdown with final push | Low |

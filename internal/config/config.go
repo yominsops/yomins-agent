@@ -18,8 +18,10 @@ type Config struct {
 	HostnameOverride   string
 	DisableFilesystems bool
 	DisableNetwork     bool
-	InsecureSkipVerify bool
-	StateDir           string
+	InsecureSkipVerify  bool
+	StateDir            string
+	DisableAutoUpgrade  bool
+	AutoUpgradeInterval time.Duration
 }
 
 // Load parses configuration from CLI flags and environment variables.
@@ -37,6 +39,8 @@ func Load() (*Config, error) {
 	fs.BoolVar(&cfg.DisableNetwork, "disable-network", false, "Disable network interface metrics (YOMINS_DISABLE_NETWORK)")
 	fs.BoolVar(&cfg.InsecureSkipVerify, "insecure-skip-verify", false, "Skip TLS certificate verification (dev only)")
 	fs.StringVar(&cfg.StateDir, "state-dir", "/var/lib/yomins-agent", "Directory for persistent agent state (YOMINS_STATE_DIR)")
+	fs.BoolVar(&cfg.DisableAutoUpgrade, "disable-auto-upgrade", false, "Disable automatic self-upgrade check (YOMINS_DISABLE_AUTO_UPGRADE)")
+	fs.DurationVar(&cfg.AutoUpgradeInterval, "auto-upgrade-interval", 24*time.Hour, "How often to check for a newer version (YOMINS_AUTO_UPGRADE_INTERVAL)")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, fmt.Errorf("parse flags: %w", err)
@@ -96,6 +100,18 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 	if !explicit["state-dir"] {
 		if v := os.Getenv("YOMINS_STATE_DIR"); v != "" {
 			cfg.StateDir = v
+		}
+	}
+	if !explicit["disable-auto-upgrade"] {
+		if v := os.Getenv("YOMINS_DISABLE_AUTO_UPGRADE"); isTruthy(v) {
+			cfg.DisableAutoUpgrade = true
+		}
+	}
+	if !explicit["auto-upgrade-interval"] {
+		if v := os.Getenv("YOMINS_AUTO_UPGRADE_INTERVAL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				cfg.AutoUpgradeInterval = d
+			}
 		}
 	}
 }
