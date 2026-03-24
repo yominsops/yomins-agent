@@ -296,7 +296,7 @@ func parseDmidecodeMemory(out []byte) []MemoryModuleStat {
 
 // isVirtualBlockDevice returns true for device names that are not physical disks.
 func isVirtualBlockDevice(dev string) bool {
-	for _, prefix := range []string{"loop", "ram", "zram", "dm-", "md", "sr"} {
+	for _, prefix := range []string{"loop", "ram", "zram", "dm-", "md", "sr", "nbd"} {
 		if strings.HasPrefix(dev, prefix) {
 			return true
 		}
