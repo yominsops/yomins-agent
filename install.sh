@@ -315,7 +315,13 @@ install_service() {
     chmod 700 "${STATE_DIR}/upgrade"
 
     systemctl daemon-reload
-    systemctl enable --now "$SERVICE_NAME"
+    systemctl enable "$SERVICE_NAME"
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        info "Restarting ${SERVICE_NAME}..."
+        systemctl restart "$SERVICE_NAME"
+    else
+        systemctl start "$SERVICE_NAME"
+    fi
 }
 
 # ---------------------------------------------------------------------------
