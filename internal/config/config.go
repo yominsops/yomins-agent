@@ -23,8 +23,10 @@ type Config struct {
 	StateDir            string
 	DisableAutoUpgrade  bool
 	AutoUpgradeInterval time.Duration
-	ExcludeMountpoints  []string
-	ExcludeInterfaces   []string
+	ExcludeMountpoints     []string
+	ExcludeInterfaces      []string
+	DisableKernelCareInfo  bool   // --disable-kernelcare-info / YOMINS_DISABLE_KERNELCARE_INFO
+	VirtualizationOverride string // --virtualization-override / YOMINS_VIRTUALIZATION_OVERRIDE
 }
 
 // Load parses configuration from CLI flags and environment variables.
@@ -45,6 +47,11 @@ func Load() (*Config, error) {
 	fs.StringVar(&cfg.StateDir, "state-dir", "/var/lib/yomins-agent", "Directory for persistent agent state (YOMINS_STATE_DIR)")
 	fs.BoolVar(&cfg.DisableAutoUpgrade, "disable-auto-upgrade", false, "Disable automatic self-upgrade check (YOMINS_DISABLE_AUTO_UPGRADE)")
 	fs.DurationVar(&cfg.AutoUpgradeInterval, "auto-upgrade-interval", 24*time.Hour, "How often to check for a newer version (YOMINS_AUTO_UPGRADE_INTERVAL)")
+
+	fs.BoolVar(&cfg.DisableKernelCareInfo, "disable-kernelcare-info", false,
+		"Disable KernelCare installation check (YOMINS_DISABLE_KERNELCARE_INFO)")
+	fs.StringVar(&cfg.VirtualizationOverride, "virtualization-override", "",
+		"Override detected virtualization type, e.g. 'kvm', 'none' (YOMINS_VIRTUALIZATION_OVERRIDE)")
 
 	var excludeMountpointsRaw string
 	var excludeInterfacesRaw string
@@ -136,6 +143,16 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 			if d, err := time.ParseDuration(v); err == nil {
 				cfg.AutoUpgradeInterval = d
 			}
+		}
+	}
+	if !explicit["disable-kernelcare-info"] {
+		if v := os.Getenv("YOMINS_DISABLE_KERNELCARE_INFO"); isTruthy(v) {
+			cfg.DisableKernelCareInfo = true
+		}
+	}
+	if !explicit["virtualization-override"] {
+		if v := os.Getenv("YOMINS_VIRTUALIZATION_OVERRIDE"); v != "" {
+			cfg.VirtualizationOverride = v
 		}
 	}
 }

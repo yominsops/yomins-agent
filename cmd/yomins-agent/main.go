@@ -109,6 +109,10 @@ func buildCollectors(cfg *config.Config) []collector.Collector {
 		collector.NewCPUCollector(),
 		collector.NewMemoryCollector(),
 		collector.NewSystemCollector(),
+		collector.NewInfoCollector(collector.InfoConfig{
+			DisableKernelCareInfo:  cfg.DisableKernelCareInfo,
+			VirtualizationOverride: cfg.VirtualizationOverride,
+		}),
 	}
 	if !cfg.DisableFilesystems {
 		if len(cfg.ExcludeMountpoints) > 0 {
