@@ -6,8 +6,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,6 +92,242 @@ func (r *realInfoReader) KernelCareInfoWithContext(ctx context.Context) (*Kernel
 	ver = strings.TrimPrefix(ver, "kcarectl v")
 	ver = strings.TrimPrefix(ver, "v")
 	return &KernelCareInfoStat{Installed: true, Version: ver}, nil
+}
+
+func (r *realInfoReader) MemoryInfoWithContext(ctx context.Context) (*MemoryInfo, error) {
+	info := &MemoryInfo{TotalMB: readMemTotalMB()}
+
+	// Per-DIMM details from dmidecode (optional, requires root).
+	if _, err := exec.LookPath("dmidecode"); err == nil {
+		if out, err := exec.CommandContext(ctx, "dmidecode", "--type", "17").Output(); err == nil {
+			info.Modules = parseDmidecodeMemory(out)
+		}
+	}
+
+	return info, nil
+}
+
+// readMemTotalMB reads the total physical memory from /proc/meminfo.
+func readMemTotalMB() int {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		// Format: "MemTotal:       32768000 kB"
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			if kb, err := strconv.Atoi(fields[1]); err == nil {
+				return kb / 1024
+			}
+		}
+	}
+	return 0
+}
+
+func (r *realInfoReader) DiskHardwareWithContext(_ context.Context) ([]DiskHardwareStat, error) {
+	entries, err := os.ReadDir("/sys/block")
+	if err != nil {
+		return nil, err
+	}
+	var disks []DiskHardwareStat
+	for _, e := range entries {
+		dev := e.Name()
+		if isVirtualBlockDevice(dev) {
+			continue
+		}
+		d := DiskHardwareStat{Device: dev}
+
+		// Size: sectors × 512 → decimal GB
+		if data, err := os.ReadFile(fmt.Sprintf("/sys/block/%s/size", dev)); err == nil {
+			if sectors, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
+				d.SizeGB = int(sectors * 512 / 1_000_000_000)
+			}
+		}
+
+		// Type + Transport
+		if strings.HasPrefix(dev, "nvme") {
+			d.Type = "nvme"
+			d.Transport = "nvme"
+		} else {
+			rotPath := fmt.Sprintf("/sys/block/%s/queue/rotational", dev)
+			if data, err := os.ReadFile(rotPath); err == nil {
+				switch strings.TrimSpace(string(data)) {
+				case "0":
+					d.Type = "ssd"
+				case "1":
+					d.Type = "hdd"
+				}
+			}
+			d.Transport = diskTransport(dev)
+		}
+
+		// Model
+		if model, err := readTrimmed(fmt.Sprintf("/sys/block/%s/device/model", dev)); err == nil {
+			d.Model = model
+		}
+
+		disks = append(disks, d)
+	}
+	return disks, nil
+}
+
+func (r *realInfoReader) NetworkHardwareWithContext(_ context.Context) ([]NetworkHardwareStat, error) {
+	entries, err := os.ReadDir("/sys/class/net")
+	if err != nil {
+		return nil, err
+	}
+	var nics []NetworkHardwareStat
+	for _, e := range entries {
+		iface := e.Name()
+		// Only physical NICs have a "device" entry.
+		if _, err := os.Stat(fmt.Sprintf("/sys/class/net/%s/device", iface)); err != nil {
+			continue
+		}
+
+		n := NetworkHardwareStat{Interface: iface}
+
+		if data, err := readTrimmed(fmt.Sprintf("/sys/class/net/%s/speed", iface)); err == nil {
+			if v, err := strconv.Atoi(data); err == nil && v > 0 {
+				n.SpeedMbps = v
+			}
+		}
+		if data, err := readTrimmed(fmt.Sprintf("/sys/class/net/%s/operstate", iface)); err == nil {
+			n.State = data
+		} else {
+			n.State = "unknown"
+		}
+		if data, err := readTrimmed(fmt.Sprintf("/sys/class/net/%s/duplex", iface)); err == nil {
+			n.Duplex = data
+		} else {
+			n.Duplex = "unknown"
+		}
+
+		nics = append(nics, n)
+	}
+	return nics, nil
+}
+
+func (r *realInfoReader) SystemHardwareWithContext(_ context.Context) (*SystemHardwareStat, error) {
+	vendor, _ := readTrimmed("/sys/class/dmi/id/sys_vendor")
+	product, _ := readTrimmed("/sys/class/dmi/id/product_name")
+	return &SystemHardwareStat{Vendor: vendor, Product: product}, nil
+}
+
+// parseDmidecodeMemory parses `dmidecode --type 17` output into module stats.
+func parseDmidecodeMemory(out []byte) []MemoryModuleStat {
+	var result []MemoryModuleStat
+	// Records are separated by blank lines; each memory device starts with "Memory Device"
+	records := bytes.Split(out, []byte("\n\n"))
+	for _, rec := range records {
+		lines := strings.Split(string(rec), "\n")
+		// Check this is a Memory Device record.
+		isMemDevice := false
+		for _, l := range lines {
+			if strings.TrimSpace(l) == "Memory Device" {
+				isMemDevice = true
+				break
+			}
+		}
+		if !isMemDevice {
+			continue
+		}
+
+		var m MemoryModuleStat
+		locatorSet := false
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			k, v, ok := strings.Cut(line, ": ")
+			if !ok {
+				continue
+			}
+			v = strings.TrimSpace(v)
+			switch k {
+			case "Size":
+				if v == "No Module Installed" || v == "Unknown" {
+					m.SizeMB = 0
+				} else if strings.HasSuffix(v, " GB") {
+					if n, err := strconv.Atoi(strings.TrimSuffix(v, " GB")); err == nil {
+						m.SizeMB = n * 1024
+					}
+				} else if strings.HasSuffix(v, " MB") {
+					if n, err := strconv.Atoi(strings.TrimSuffix(v, " MB")); err == nil {
+						m.SizeMB = n
+					}
+				}
+			case "Type":
+				if v != "Unknown" {
+					m.Type = v
+				}
+			case "Speed":
+				// "2666 MT/s" or "Unknown"
+				if v != "Unknown" {
+					fields := strings.Fields(v)
+					if len(fields) > 0 {
+						if n, err := strconv.Atoi(fields[0]); err == nil {
+							m.SpeedMhz = n
+						}
+					}
+				}
+			case "Manufacturer":
+				if v != "Not Specified" && v != "Unknown" {
+					m.Manufacturer = v
+				}
+			case "Locator":
+				// Take the first "Locator:" (not "Bank Locator:").
+				if !locatorSet {
+					m.Locator = v
+					locatorSet = true
+				}
+			}
+		}
+		if m.SizeMB > 0 {
+			result = append(result, m)
+		}
+	}
+	return result
+}
+
+// isVirtualBlockDevice returns true for device names that are not physical disks.
+func isVirtualBlockDevice(dev string) bool {
+	for _, prefix := range []string{"loop", "ram", "zram", "dm-", "md", "sr"} {
+		if strings.HasPrefix(dev, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// diskTransport attempts to determine the transport type for a non-NVMe block device.
+func diskTransport(dev string) string {
+	subsysPath := fmt.Sprintf("/sys/block/%s/device/subsystem", dev)
+	target, err := os.Readlink(subsysPath)
+	if err != nil {
+		return "unknown"
+	}
+	target = strings.ToLower(target)
+	if strings.Contains(target, "scsi") {
+		return "sata"
+	}
+	if strings.Contains(target, "nvme") {
+		return "nvme"
+	}
+	return "unknown"
+}
+
+// readTrimmed reads a file and returns its content with leading/trailing whitespace removed.
+func readTrimmed(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 // parseOSRelease reads /etc/os-release and returns the distro ID and version.

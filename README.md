@@ -70,21 +70,46 @@ The agent identifies itself with a project-scoped token. The server resolves the
 
 ### Server identity (software & hardware)
 
-Static/semi-static metadata collected once per push cycle. Individual metrics are omitted rather than failing the whole cycle if data is unavailable.
+Static/semi-static metadata collected once per push cycle. Each metric is omitted independently if its data source is unavailable — a missing tool never prevents other metrics from being collected.
+
+#### Software
 
 | Metric | Type | Description |
 |--------|------|-------------|
 | `system_info` | Gauge | Always 1; labels: `distribution`, `distribution_version`, `kernel_version`, `virtualization` |
-| `cpu_info` | Gauge | Always 1; labels: `model`, `cores` (physical), `threads` (logical) |
 | `system_last_kernel_update_timestamp` | Gauge | Unix timestamp of the last kernel package update; omitted if not detectable |
 | `system_last_software_update_timestamp` | Gauge | Unix timestamp of the last software package update; omitted if not detectable |
 | `kernelcare_info` | Gauge | Always 1, label `version`; emitted only when KernelCare is installed and detection is not disabled |
 
-**Linux data sources:**
-- `system_info` — distribution from `/etc/os-release`; kernel version via `uname`; virtualization via `systemd-detect-virt` with `/sys/class/dmi/id/sys_vendor` fallback
-- `cpu_info` — model and core counts via gopsutil (reads `/proc/cpuinfo`)
-- Update timestamps — scans `/var/log/dpkg.log{,.1}` on Debian/Ubuntu; falls back to `rpm -qa --last` on RHEL-based systems
-- `kernelcare_info` — checks for the `kcarectl` binary; retrieves version via `kcarectl --version`
+#### Hardware
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `cpu_info` | Gauge | Always 1; labels: `model`, `cores` (physical), `threads` (logical) |
+| `memory_hardware_info` | Gauge | Always 1; label: `total_mb` — total installed RAM |
+| `memory_module_info` | Gauge | Always 1 per populated DIMM; labels: `index`, `size_mb`, `type`, `speed_mhz`, `manufacturer`, `locator` — requires `dmidecode` |
+| `disk_hardware_info` | Gauge | Always 1 per physical disk; labels: `device`, `model`, `size_gb`, `type` (`ssd`/`hdd`/`nvme`), `transport` |
+| `network_hardware_info` | Gauge | Always 1 per physical NIC; labels: `interface`, `speed_mbps`, `state`, `duplex` |
+| `hardware_info` | Gauge | Always 1; labels: `vendor`, `product` — server manufacturer and model name |
+
+#### Data sources and tool requirements (Linux)
+
+| Metric | Source | Extra tool required |
+|--------|--------|---------------------|
+| `system_info` — distribution | `/etc/os-release` | — |
+| `system_info` — kernel version | `/proc/version` via gopsutil | — |
+| `system_info` — virtualization | `systemd-detect-virt --vm`, fallback `/sys/class/dmi/id/sys_vendor` | `systemd-detect-virt` (optional; falls back to sysfs) |
+| `system_last_*_update_timestamp` | `/var/log/dpkg.log{,.1}` on Debian/Ubuntu | — |
+| `system_last_*_update_timestamp` | `rpm -qa --last` on RHEL/CentOS/AlmaLinux | `rpm` (must be installed) |
+| `kernelcare_info` | `kcarectl --version` | `kcarectl` (KernelCare agent; omitted if not installed) |
+| `cpu_info` | `/proc/cpuinfo` via gopsutil | — |
+| `memory_hardware_info` — total | `/proc/meminfo` | — |
+| `memory_module_info` — per DIMM | `dmidecode --type 17` | **`dmidecode`** (must be installed; usually requires root) |
+| `disk_hardware_info` | `/sys/block/*/size`, `queue/rotational`, `device/model` | — |
+| `network_hardware_info` | `/sys/class/net/*/speed`, `operstate`, `duplex` | — |
+| `hardware_info` | `/sys/class/dmi/id/sys_vendor`, `product_name` | — |
+
+> **`dmidecode` note:** Install with `apt install dmidecode` or `yum install dmidecode`. The agent must run as root (or with `CAP_SYS_RAWIO`) for dmidecode to access DMI tables. When unavailable, `memory_hardware_info` (total RAM) is still emitted from `/proc/meminfo`; only the per-DIMM `memory_module_info` metrics are skipped.
 
 ### Agent self-metrics
 | Metric | Type | Description |

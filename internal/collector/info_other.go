@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 type realInfoReader struct {
@@ -44,4 +45,24 @@ func (r *realInfoReader) PackageUpdateTimesWithContext(_ context.Context) (*Pack
 
 func (r *realInfoReader) KernelCareInfoWithContext(_ context.Context) (*KernelCareInfoStat, error) {
 	return &KernelCareInfoStat{Installed: false}, nil
+}
+
+func (r *realInfoReader) MemoryInfoWithContext(ctx context.Context) (*MemoryInfo, error) {
+	vm, err := mem.VirtualMemoryWithContext(ctx)
+	if err != nil {
+		return &MemoryInfo{}, nil
+	}
+	return &MemoryInfo{TotalMB: int(vm.Total / (1024 * 1024))}, nil
+}
+
+func (r *realInfoReader) DiskHardwareWithContext(_ context.Context) ([]DiskHardwareStat, error) {
+	return nil, nil
+}
+
+func (r *realInfoReader) NetworkHardwareWithContext(_ context.Context) ([]NetworkHardwareStat, error) {
+	return nil, nil
+}
+
+func (r *realInfoReader) SystemHardwareWithContext(_ context.Context) (*SystemHardwareStat, error) {
+	return &SystemHardwareStat{}, nil
 }
