@@ -98,25 +98,6 @@ func newFullMock() *mockInfoReader {
 	}
 }
 
-func findPoint(pts []interface{ GetName() string }, name string) bool {
-	for _, p := range pts {
-		if p.GetName() == name {
-			return true
-		}
-	}
-	return false
-}
-
-func countByName(pts []struct{ Name string }, name string) int {
-	n := 0
-	for _, p := range pts {
-		if p.Name == name {
-			n++
-		}
-	}
-	return n
-}
-
 func TestInfoCollector_Name(t *testing.T) {
 	c := collector.NewInfoCollectorWithReader(&mockInfoReader{}, collector.InfoConfig{})
 	if c.Name() != "info" {
