@@ -8,7 +8,8 @@ A lightweight Go agent that collects host-level system metrics and pushes them t
 [Your Server]                          [YominsOps]
   yomins-agent
     → collects CPU, RAM, disk,
-      network, system metrics
+      network, system, and server
+      identity metrics
     → pushes every 60s over HTTPS  →   Ingestion endpoint
       with Bearer token auth           validates token
                                        enriches with project labels
@@ -67,6 +68,24 @@ The agent identifies itself with a project-scoped token. The server resolves the
 | `system_uptime_seconds` | Gauge | System uptime in seconds |
 | `system_load_average` | Gauge | Load average (label `period`: `1m`, `5m`, `15m`) |
 
+### Server identity (software & hardware)
+
+Static/semi-static metadata collected once per push cycle. Individual metrics are omitted rather than failing the whole cycle if data is unavailable.
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `system_info` | Gauge | Always 1; labels: `distribution`, `distribution_version`, `kernel_version`, `virtualization` |
+| `cpu_info` | Gauge | Always 1; labels: `model`, `cores` (physical), `threads` (logical) |
+| `system_last_kernel_update_timestamp` | Gauge | Unix timestamp of the last kernel package update; omitted if not detectable |
+| `system_last_software_update_timestamp` | Gauge | Unix timestamp of the last software package update; omitted if not detectable |
+| `kernelcare_info` | Gauge | Always 1, label `version`; emitted only when KernelCare is installed and detection is not disabled |
+
+**Linux data sources:**
+- `system_info` — distribution from `/etc/os-release`; kernel version via `uname`; virtualization via `systemd-detect-virt` with `/sys/class/dmi/id/sys_vendor` fallback
+- `cpu_info` — model and core counts via gopsutil (reads `/proc/cpuinfo`)
+- Update timestamps — scans `/var/log/dpkg.log{,.1}` on Debian/Ubuntu; falls back to `rpm -qa --last` on RHEL-based systems
+- `kernelcare_info` — checks for the `kcarectl` binary; retrieves version via `kcarectl --version`
+
 ### Agent self-metrics
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -99,6 +118,8 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--state-dir` | `YOMINS_STATE_DIR` | `/var/lib/yomins-agent` | Persistent state directory |
 | `--disable-auto-upgrade` | `YOMINS_DISABLE_AUTO_UPGRADE` | `false` | Disable automatic self-upgrade |
 | `--auto-upgrade-interval` | `YOMINS_AUTO_UPGRADE_INTERVAL` | `24h` | How often to check for a newer version |
+| `--disable-kernelcare-info` | `YOMINS_DISABLE_KERNELCARE_INFO` | `false` | Disable KernelCare detection (skip `kernelcare_info` metric) |
+| `--virtualization-override` | `YOMINS_VIRTUALIZATION_OVERRIDE` | *(auto-detected)* | Override the detected virtualization type (e.g. `kvm`, `none`) |
 | `--insecure-skip-verify` | — | `false` | Skip TLS verification (**dev only**) |
 
 ## Security model
