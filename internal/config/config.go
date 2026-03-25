@@ -12,6 +12,7 @@ import (
 // Config holds all agent runtime configuration.
 type Config struct {
 	Version             bool
+	Uninstall           bool
 	Server              string
 	Token               string
 	Interval            time.Duration
@@ -36,6 +37,7 @@ func Load() (*Config, error) {
 
 	fs := flag.NewFlagSet("yomins-agent", flag.ContinueOnError)
 	fs.BoolVar(&cfg.Version, "version", false, "Print version information and exit")
+	fs.BoolVar(&cfg.Uninstall, "uninstall", false, "Remove the agent, its service, config, and state from this system (requires root)")
 	fs.StringVar(&cfg.Server, "server", "", "YominsOps ingestion endpoint URL (YOMINS_SERVER)")
 	fs.StringVar(&cfg.Token, "token", "", "Project-scoped authentication token (YOMINS_TOKEN)")
 	fs.DurationVar(&cfg.Interval, "interval", 60*time.Second, "Metrics push interval (YOMINS_INTERVAL)")

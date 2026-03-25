@@ -14,6 +14,7 @@
 #   --interval <DURATION> Push interval, e.g. 30s, 2m (default: 60s)
 #   --version <VERSION>   Agent version to install (default: latest)
 #   --yes                 Skip confirmation prompt
+#   --uninstall           Remove the agent from this system
 #   --help                Show this help
 
 set -euo pipefail
@@ -28,6 +29,7 @@ AGENT_VERSION=""            # resolved to latest if empty
 SKIP_CONFIRM=false
 ALLOW_HTTP=false            # dev/testing only: bypass HTTPS requirement
 IS_UPGRADE=false            # set to true when upgrading an existing install
+DO_UNINSTALL=false
 
 BINARY_NAME="yomins-agent"
 SERVICE_NAME="yomins-agent"
@@ -66,6 +68,7 @@ Options:
   --interval <DURATION> Metrics push interval (default: ${AGENT_INTERVAL})
   --version <VERSION>   Agent version to install (default: latest)
   --yes                 Skip confirmation prompt
+  --uninstall           Remove the agent, service, config, and state from this system
   --help                Show this help and exit
 EOF
 }
@@ -77,8 +80,9 @@ parse_args() {
             --server)     AGENT_SERVER="$2";   shift 2 ;;
             --interval)   AGENT_INTERVAL="$2"; shift 2 ;;
             --version)    AGENT_VERSION="$2";  shift 2 ;;
-            --yes|-y)     SKIP_CONFIRM=true;   shift   ;;
-            --allow-http) ALLOW_HTTP=true;     shift   ;;
+            --yes|-y)        SKIP_CONFIRM=true;    shift   ;;
+            --allow-http)    ALLOW_HTTP=true;      shift   ;;
+            --uninstall)     DO_UNINSTALL=true;    shift   ;;
             --help|-h)   usage; exit 0 ;;
             *) die "Unknown option: $1. Run with --help for usage." ;;
         esac
@@ -345,12 +349,66 @@ verify_running() {
 }
 
 # ---------------------------------------------------------------------------
+# Uninstall
+# ---------------------------------------------------------------------------
+do_uninstall() {
+    printf "\n"
+    printf "${BOLD}Uninstall summary${RESET}\n"
+    printf "  Binary:   %s\n" "${INSTALL_DIR}/${BINARY_NAME}"
+    printf "  Config:   %s\n" "${CONFIG_DIR}"
+    printf "  Lib dir:  %s\n" "${UPGRADE_LIB_DIR}"
+    printf "  State:    %s\n" "${STATE_DIR}"
+    printf "  Service:  %s\n" "${SERVICE_FILE}"
+    printf "  User:     %s\n" "${SERVICE_NAME}"
+    printf "\n"
+
+    if [[ "$SKIP_CONFIRM" != true ]]; then
+        local prompt="Proceed with uninstall? [y/N] "
+        local answer
+        if [[ -t 0 ]]; then
+            read -rp "$prompt" answer
+        elif [[ -e /dev/tty ]]; then
+            read -rp "$prompt" answer </dev/tty
+        else
+            warn "Non-interactive mode — skipping confirmation."
+            answer="y"
+        fi
+        [[ "$answer" =~ ^[Yy]$ ]] || { info "Cancelled."; exit 0; }
+    fi
+
+    info "Stopping service..."
+    systemctl stop  "$SERVICE_NAME" 2>/dev/null || true
+    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+
+    info "Removing service file..."
+    rm -f "$SERVICE_FILE"
+    systemctl daemon-reload
+
+    info "Removing files..."
+    rm -f "${INSTALL_DIR}/${BINARY_NAME}"
+    rm -rf "$CONFIG_DIR"
+    rm -rf "$UPGRADE_LIB_DIR"
+    rm -rf "$STATE_DIR"
+
+    info "Removing system user..."
+    userdel "$SERVICE_NAME" 2>/dev/null || true
+
+    printf "\n"
+    success "YominsOps agent removed."
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 main() {
     parse_args "$@"
 
     [[ "$(id -u)" -eq 0 ]] || die "This script must be run as root (use sudo)."
+
+    if [[ "$DO_UNINSTALL" == true ]]; then
+        do_uninstall
+        exit 0
+    fi
 
     # Upgrade mode: --token not supplied but an existing config is present.
     # Load token and other values from the existing env file so they are

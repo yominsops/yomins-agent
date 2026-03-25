@@ -40,6 +40,7 @@ curl -fsSL https://get.yominsops.com/agent | sudo bash -s -- \
 | `--interval` | `60s` | Push interval (e.g. `30s`, `2m`) |
 | `--version` | latest | Pin to a specific release |
 | `--yes` | — | Skip confirmation prompt |
+| `--uninstall` | — | Remove the agent from this system |
 
 The script requires HTTPS for `--server` and will refuse plain `http://` URLs.
 
@@ -137,14 +138,30 @@ volumes:
 
 ## Uninstall
 
-**systemd:**
+**Via the binary (recommended for systemd installs):**
+
+```bash
+sudo yomins-agent --uninstall
+```
+
+The binary stops the service, removes the service file, config, state, upgrade helper, and the binary itself, then deletes the `yomins-agent` system user.
+
+**Via the install script (e.g. for scripted/CI teardown):**
+
+```bash
+curl -fsSL https://get.yominsops.com/agent | sudo bash -s -- --uninstall
+# non-interactive:
+curl -fsSL https://get.yominsops.com/agent | sudo bash -s -- --uninstall --yes
+```
+
+**Manual systemd removal:**
 ```bash
 systemctl disable --now yomins-agent
 rm /etc/systemd/system/yomins-agent.service
-rm /usr/local/bin/yomins-agent
-rm -rf /etc/yomins-agent /var/lib/yomins-agent
-userdel yomins-agent
 systemctl daemon-reload
+rm /usr/local/bin/yomins-agent
+rm -rf /etc/yomins-agent /usr/local/lib/yomins-agent /var/lib/yomins-agent
+userdel yomins-agent
 ```
 
 **Docker:**

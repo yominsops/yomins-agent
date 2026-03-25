@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +37,9 @@ func run() error {
 	if cfg.Version {
 		fmt.Println(version.Info())
 		return nil
+	}
+	if cfg.Uninstall {
+		return runUninstall()
 	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
@@ -131,6 +137,70 @@ func buildCollectors(cfg *config.Config) []collector.Collector {
 		}
 	}
 	return collectors
+}
+
+// runUninstall stops the systemd service, removes all installed files, and
+// deletes the yomins-agent system user. Must be run as root.
+func runUninstall() error {
+	if os.Getuid() != 0 {
+		return fmt.Errorf("--uninstall must be run as root (use sudo)")
+	}
+
+	const (
+		serviceName = "yomins-agent"
+		serviceFile = "/etc/systemd/system/yomins-agent.service"
+		binaryPath  = "/usr/local/bin/yomins-agent"
+		configDir   = "/etc/yomins-agent"
+		libDir      = "/usr/local/lib/yomins-agent"
+		stateDir    = "/var/lib/yomins-agent"
+	)
+
+	fmt.Printf("\nThis will remove the yomins-agent service, binary, config, and state from this system.\n\n")
+	fmt.Printf("  Service file:  %s\n", serviceFile)
+	fmt.Printf("  Binary:        %s\n", binaryPath)
+	fmt.Printf("  Config dir:    %s\n", configDir)
+	fmt.Printf("  Lib dir:       %s\n", libDir)
+	fmt.Printf("  State dir:     %s\n", stateDir)
+	fmt.Printf("  System user:   %s\n\n", serviceName)
+
+	if t, err := os.Open("/dev/tty"); err == nil {
+		defer t.Close()
+		fmt.Print("Proceed with uninstall? [y/N] ")
+		scanner := bufio.NewScanner(t)
+		scanner.Scan()
+		answer := strings.TrimSpace(scanner.Text())
+		if answer != "y" && answer != "Y" {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	run := func(label string, fn func() error) {
+		fmt.Printf("  %-30s ", label+"...")
+		if err := fn(); err != nil {
+			fmt.Printf("warning: %v\n", err)
+		} else {
+			fmt.Println("done")
+		}
+	}
+
+	runCmd := func(args ...string) error {
+		return exec.Command(args[0], args[1:]...).Run()
+	}
+
+	fmt.Println()
+	run("Stopping service",      func() error { return runCmd("systemctl", "stop", serviceName) })
+	run("Disabling service",     func() error { return runCmd("systemctl", "disable", serviceName) })
+	run("Removing service file", func() error { return os.Remove(serviceFile) })
+	run("Reloading systemd",     func() error { return runCmd("systemctl", "daemon-reload") })
+	run("Removing config dir",   func() error { return os.RemoveAll(configDir) })
+	run("Removing lib dir",      func() error { return os.RemoveAll(libDir) })
+	run("Removing state dir",    func() error { return os.RemoveAll(stateDir) })
+	run("Removing binary",       func() error { return os.Remove(binaryPath) })
+	run("Removing system user",  func() error { return runCmd("userdel", serviceName) })
+
+	fmt.Println("\nYominsOps agent removed.")
+	return nil
 }
 
 // setupLogger configures the global slog logger for the given level.
