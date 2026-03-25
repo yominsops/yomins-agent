@@ -68,6 +68,7 @@ jobs:
         run: |
           cp systemd/yomins-agent.service dist/yomins-agent.service
           cp systemd/apply-upgrade.sh dist/apply-upgrade.sh
+          cp install.sh dist/install.sh
 
       - uses: actions/upload-artifact@v4
         with:
@@ -113,7 +114,8 @@ jobs:
             dist/checksums.txt \
             dist/checksums.txt.bundle \
             dist/yomins-agent.service \
-            dist/apply-upgrade.sh
+            dist/apply-upgrade.sh \
+            dist/install.sh
 
   # -------------------------------------------------------------------------
   # Build and push Docker image to ghcr.io
