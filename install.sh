@@ -223,7 +223,8 @@ confirm() {
         printf "  Version:  %s\n" "${AGENT_VERSION}"
     fi
     printf "\n"
-    local prompt="Proceed with ${IS_UPGRADE:+upgrade}${IS_UPGRADE:-installation}? [y/N] "
+    local action; [[ "$IS_UPGRADE" == true ]] && action="upgrade" || action="installation"
+    local prompt="Proceed with ${action}? [Y/n] "
     if [[ -t 0 ]]; then
         read -rp "$prompt" answer
     elif [[ -e /dev/tty ]]; then
@@ -232,7 +233,7 @@ confirm() {
         warn "Non-interactive mode — skipping confirmation."
         answer="y"
     fi
-    [[ "$answer" =~ ^[Yy]$ ]] || { info "Cancelled."; exit 0; }
+    [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]] || { info "Cancelled."; exit 0; }
 }
 
 # ---------------------------------------------------------------------------
