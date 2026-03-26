@@ -47,24 +47,37 @@ func run() error {
 
 	// 2. Configure structured logger.
 	setupLogger(cfg.LogLevel)
-	slog.Info("yomins-agent", "version", version.Info())
 
 	// 3. Resolve hostname.
-	hostname := cfg.HostnameOverride
-	if hostname == "" {
-		if h, err := os.Hostname(); err == nil {
-			hostname = h
-		}
-	}
+	hostname := resolveHostname(cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// 4. Load or generate persistent agent identity.
+	// 4. Dry-run mode: print metrics to stdout, skip server/identity/upgrades.
+	if cfg.DryRun {
+		fmt.Fprintf(os.Stderr, "dry-run mode: collecting every %s, printing to stdout (Ctrl-C to stop)\n", cfg.Interval)
+		collectors := buildCollectors(cfg)
+		reg := collector.NewRegistry(collectors...)
+		self := collector.NewSelfMetricsCollector("dry-run", time.Now())
+		tp := transport.NewStdoutTransport()
+		ag := agent.New(agent.Config{
+			Interval:        cfg.Interval,
+			AgentID:         "dry-run",
+			Hostname:        hostname,
+			Version:         version.Version,
+			ShutdownTimeout: 5 * time.Second,
+		}, reg, tp, self)
+		return ag.Run(ctx)
+	}
+
+	slog.Info("yomins-agent", "version", version.Info())
+
+	// 5. Load or generate persistent agent identity.
 	id := identity.Load(cfg.StateDir)
 	slog.Info("agent identity", "agent_id", id.AgentID)
 
-	// 4b. Check for available upgrades and stage if found.
+	// 5b. Check for available upgrades and stage if found.
 	// RunOnce calls os.Exit(0) if an upgrade is staged; otherwise it returns
 	// quickly (< 15s timeout) and normal startup continues.
 	upgradeManager := upgrade.NewManager(upgrade.Config{
@@ -75,14 +88,14 @@ func run() error {
 	})
 	upgradeManager.RunOnce(ctx)
 
-	// 5. Build collector registry.
+	// 6. Build collector registry.
 	collectors := buildCollectors(cfg)
 	reg := collector.NewRegistry(collectors...)
 
-	// 6. Create self-metrics collector.
+	// 7. Create self-metrics collector.
 	self := collector.NewSelfMetricsCollector(id.AgentID, time.Now())
 
-	// 7. Create HTTP transport.
+	// 8. Create HTTP transport.
 	tp := transport.NewHTTPTransport(transport.HTTPConfig{
 		Server:             cfg.Server,
 		Token:              cfg.Token,
@@ -90,7 +103,7 @@ func run() error {
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 	})
 
-	// 8. Create and run agent.
+	// 9. Create and run agent.
 	ag := agent.New(agent.Config{
 		Interval:        cfg.Interval,
 		AgentID:         id.AgentID,
@@ -201,6 +214,17 @@ func runUninstall() error {
 
 	fmt.Println("\nYominsOps agent removed.")
 	return nil
+}
+
+// resolveHostname returns the effective hostname from config or os.Hostname.
+func resolveHostname(cfg *config.Config) string {
+	if cfg.HostnameOverride != "" {
+		return cfg.HostnameOverride
+	}
+	if h, err := os.Hostname(); err == nil {
+		return h
+	}
+	return ""
 }
 
 // setupLogger configures the global slog logger for the given level.

@@ -125,6 +125,41 @@ Static/semi-static metadata collected once per push cycle. Each metric is omitte
 
 All metrics carry agent-level labels: `agent_id`, `hostname`, `agent_version`, `source="yomins_agent"`.
 
+## Dry-run mode
+
+Use `--dry-run` to collect metrics and print them to stdout without sending anything to the server. No `--server` or `--token` is required. This is useful for verifying what the agent collects on a given host.
+
+```bash
+yomins-agent --dry-run                 # collect every 60s (default interval)
+yomins-agent --dry-run --interval 5s   # faster, for a quick spot-check
+```
+
+Output is grouped by metric prefix and printed on each tick:
+
+```
+dry-run mode: collecting every 60s, printing to stdout (Ctrl-C to stop)
+
+=== [2026-03-26 14:30:01] Tick #1 — hostname: myserver ===
+
+[cpu]
+  cpu_iowait_percent                                                                1.20
+  cpu_usage_percent                                                                42.30
+
+[disk]
+  disk_free_bytes{device=/dev/sda1,fstype=ext4,mountpoint=/}              42949672960
+  disk_used_bytes{device=/dev/sda1,fstype=ext4,mountpoint=/}              10737418240
+  disk_used_percent{device=/dev/sda1,fstype=ext4,mountpoint=/}                  61.40
+
+[memory]
+  memory_available_bytes                                                   3421345678
+  memory_total_bytes                                                       8589934592
+  memory_used_percent                                                           61.40
+...
+---
+```
+
+All other flags (`--disable-filesystems`, `--exclude-mountpoints`, `--hostname-override`, etc.) work normally alongside `--dry-run`.
+
 ## Configuration
 
 Configuration is accepted via CLI flags or environment variables. CLI flags take precedence over environment variables.
@@ -146,6 +181,7 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--disable-kernelcare-info` | `YOMINS_DISABLE_KERNELCARE_INFO` | `false` | Disable KernelCare detection (skip `kernelcare_info` metric) |
 | `--virtualization-override` | `YOMINS_VIRTUALIZATION_OVERRIDE` | *(auto-detected)* | Override the detected virtualization type (e.g. `kvm`, `none`) |
 | `--insecure-skip-verify` | — | `false` | Skip TLS verification (**dev only**) |
+| `--dry-run` | — | `false` | Print collected metrics to stdout instead of sending to the server; `--server` and `--token` are not required |
 
 ## Security model
 

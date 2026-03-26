@@ -13,6 +13,7 @@ import (
 type Config struct {
 	Version             bool
 	Uninstall           bool
+	DryRun              bool
 	Server              string
 	Token               string
 	Interval            time.Duration
@@ -38,6 +39,7 @@ func Load() (*Config, error) {
 	fs := flag.NewFlagSet("yomins-agent", flag.ContinueOnError)
 	fs.BoolVar(&cfg.Version, "version", false, "Print version information and exit")
 	fs.BoolVar(&cfg.Uninstall, "uninstall", false, "Remove the agent, its service, config, and state from this system (requires root)")
+	fs.BoolVar(&cfg.DryRun, "dry-run", false, "Print collected metrics to stdout instead of sending to the server (no --server or --token required)")
 	fs.StringVar(&cfg.Server, "server", "", "YominsOps ingestion endpoint URL (YOMINS_SERVER)")
 	fs.StringVar(&cfg.Token, "token", "", "Project-scoped authentication token (YOMINS_TOKEN)")
 	fs.DurationVar(&cfg.Interval, "interval", 60*time.Second, "Metrics push interval (YOMINS_INTERVAL)")
@@ -162,11 +164,13 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 // Validate returns an error if required configuration is missing or invalid.
 func (c *Config) Validate() error {
 	var errs []string
-	if c.Server == "" {
-		errs = append(errs, "--server (or YOMINS_SERVER) is required")
-	}
-	if c.Token == "" {
-		errs = append(errs, "--token (or YOMINS_TOKEN) is required")
+	if !c.DryRun {
+		if c.Server == "" {
+			errs = append(errs, "--server (or YOMINS_SERVER) is required")
+		}
+		if c.Token == "" {
+			errs = append(errs, "--token (or YOMINS_TOKEN) is required")
+		}
 	}
 	if c.Interval <= 0 {
 		errs = append(errs, "--interval must be a positive duration")
