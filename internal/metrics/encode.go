@@ -15,7 +15,7 @@ import (
 const ContentType = `text/plain; version=0.0.4; charset=utf-8`
 
 // Encode serialises a MetricSet into Prometheus text format (v0.0.4).
-// Agent-level labels (agent_id, hostname, version, source) are injected into
+// Agent-level labels (agent_id, hostname, source) are injected into
 // every metric here so that individual collectors remain identity-agnostic.
 func Encode(ms MetricSet) ([]byte, error) {
 	families := buildFamilies(ms)
@@ -66,7 +66,6 @@ func agentLabelPairs(ms MetricSet) []*dto.LabelPair {
 	return []*dto.LabelPair{
 		labelPair("agent_id", ms.AgentID),
 		labelPair("hostname", ms.Hostname),
-		labelPair("agent_version", ms.Version),
 		labelPair("source", ms.Source),
 	}
 }

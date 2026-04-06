@@ -105,6 +105,16 @@ func (s *SelfMetricsCollector) Collect(_ context.Context) ([]metrics.MetricPoint
 			Value: uptime,
 		},
 		{
+			Name: "agent_info",
+			Help: "Agent identity information",
+			Type: metrics.Gauge,
+			// Always 1; dimensions are in labels.
+			Value: 1,
+			Labels: map[string]string{
+				"agent_version": version.Version,
+			},
+		},
+		{
 			Name: "agent_build_info",
 			Help: "Agent build information",
 			Type: metrics.Gauge,

@@ -121,10 +121,11 @@ Static/semi-static metadata collected once per push cycle. Each metric is omitte
 | `agent_collection_duration_seconds` | Gauge | Last collection pass duration |
 | `agent_push_duration_seconds` | Gauge | Last push attempt duration |
 | `agent_uptime_seconds` | Gauge | Agent process uptime |
+| `agent_info` | Gauge | Always 1; labels carry `agent_version`; the final series also includes global/server labels such as `agent_id`, `hostname`, `project_id`, `customer_id` |
 | `agent_build_info` | Gauge | Always 1; labels carry `version`, `commit`, `build_date`, `go_version`, `os`, `arch` |
 | `agent_collector_error_total` | Counter | Errors per collector (label: `collector`) |
 
-All metrics carry agent-level labels: `agent_id`, `hostname`, `agent_version`, `source="yomins_agent"`.
+All metrics carry agent-level labels: `agent_id`, `hostname`, `source="yomins_agent"`.
 
 ## Dry-run mode
 

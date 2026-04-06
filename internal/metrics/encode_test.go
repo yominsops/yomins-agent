@@ -51,8 +51,8 @@ func TestEncode_GaugeMetric(t *testing.T) {
 	}
 	assertLabel(t, m, "agent_id", "test-agent-id")
 	assertLabel(t, m, "hostname", "test-host")
-	assertLabel(t, m, "agent_version", "1.0.0")
 	assertLabel(t, m, "source", "yomins_agent")
+	assertNoLabel(t, m, "agent_version")
 }
 
 func TestEncode_CounterMetric(t *testing.T) {
@@ -159,4 +159,14 @@ func assertLabel(t *testing.T, m *dto.Metric, name, want string) {
 		}
 	}
 	t.Errorf("label %q not found", name)
+}
+
+func assertNoLabel(t *testing.T, m *dto.Metric, name string) {
+	t.Helper()
+	for _, lp := range m.Label {
+		if lp.GetName() == name {
+			t.Errorf("label %q unexpectedly found with value %q", name, lp.GetValue())
+			return
+		}
+	}
 }

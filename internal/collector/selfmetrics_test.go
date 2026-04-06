@@ -35,6 +35,12 @@ func TestSelfMetricsCollector_InitialState(t *testing.T) {
 	if byName["agent_build_info"].Value != 1 {
 		t.Errorf("build_info = %v, want 1", byName["agent_build_info"].Value)
 	}
+	if byName["agent_info"].Value != 1 {
+		t.Errorf("agent_info = %v, want 1", byName["agent_info"].Value)
+	}
+	if got := byName["agent_info"].Labels["agent_version"]; got == "" {
+		t.Error("agent_info agent_version should be set")
+	}
 }
 
 func TestSelfMetricsCollector_RecordPushSuccess(t *testing.T) {
