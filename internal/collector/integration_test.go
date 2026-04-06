@@ -21,8 +21,17 @@ func TestCPUCollector_Integration(t *testing.T) {
 		t.Fatal("expected at least one metric point")
 	}
 	for _, p := range pts {
-		if p.Value < 0 || p.Value > 100 {
-			t.Errorf("cpu_usage_percent = %v, want 0-100", p.Value)
+		switch p.Name {
+		case "cpu_usage_percent", "cpu_iowait_percent":
+			if p.Value < 0 || p.Value > 100 {
+				t.Errorf("%s = %v, want 0-100", p.Name, p.Value)
+			}
+		case "cpu_seconds_total":
+			if p.Value < 0 {
+				t.Errorf("cpu_seconds_total = %v, want >= 0", p.Value)
+			}
+		default:
+			t.Errorf("unexpected CPU metric %q", p.Name)
 		}
 	}
 }

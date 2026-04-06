@@ -24,6 +24,7 @@ The agent identifies itself with a project-scoped token. The server resolves the
 | Metric | Type | Description |
 |--------|------|-------------|
 | `cpu_usage_percent` | Gauge | Total CPU usage, 0–100 |
+| `cpu_seconds_total` | Counter | Total CPU time spent in each mode since boot (label: `mode`; aggregate across all CPUs) |
 | `cpu_iowait_percent` | Gauge | CPU time spent waiting for I/O, 0–100 (absent on first collection; always 0 on macOS/BSD) |
 
 ### Memory

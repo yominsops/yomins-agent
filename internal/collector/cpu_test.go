@@ -82,7 +82,7 @@ func (m *mockCPUTimesReader) TimesWithContext(_ context.Context, _ bool) ([]coll
 
 func TestCPUCollector_IowaitSkippedOnFirstCall(t *testing.T) {
 	tr := &mockCPUTimesReader{
-		values: []collector.CPUTimesStat{{User: 100, System: 50, Idle: 800, Iowait: 50}},
+		values: []collector.CPUTimesStat{{User: 100, System: 50, Idle: 800, Nice: 25, Iowait: 50, Irq: 5, Softirq: 10, Steal: 2}},
 	}
 	c := collector.NewCPUCollectorWithReaders(&mockCPUReader{values: []float64{25.0}}, tr)
 
@@ -90,12 +90,17 @@ func TestCPUCollector_IowaitSkippedOnFirstCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	// First call: no prev snapshot, so only cpu_usage_percent.
-	if len(pts) != 1 {
-		t.Errorf("points count = %d, want 1 (first call, no delta yet)", len(pts))
+	// First call: no prev snapshot, so no iowait percentage yet.
+	if len(pts) != 9 {
+		t.Errorf("points count = %d, want 9 (usage + 8 cpu_seconds_total modes)", len(pts))
 	}
 	if pts[0].Name != "cpu_usage_percent" {
 		t.Errorf("Name = %q, want cpu_usage_percent", pts[0].Name)
+	}
+	for _, p := range pts[1:] {
+		if p.Name != "cpu_seconds_total" {
+			t.Errorf("unexpected metric %q, want cpu_seconds_total", p.Name)
+		}
 	}
 }
 
@@ -116,18 +121,31 @@ func TestCPUCollector_IowaitSecondCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
-	if len(pts) != 2 {
-		t.Fatalf("points count = %d, want 2", len(pts))
+	if len(pts) != 10 {
+		t.Fatalf("points count = %d, want 10", len(pts))
 	}
 
 	var iowaitPt *metrics.MetricPoint
+	var counterModes int
 	for i := range pts {
 		if pts[i].Name == "cpu_iowait_percent" {
 			iowaitPt = &pts[i]
 		}
+		if pts[i].Name == "cpu_seconds_total" {
+			counterModes++
+			if pts[i].Type != metrics.Counter {
+				t.Errorf("cpu_seconds_total type = %v, want Counter", pts[i].Type)
+			}
+			if pts[i].Labels["mode"] == "" {
+				t.Error("cpu_seconds_total missing mode label")
+			}
+		}
 	}
 	if iowaitPt == nil {
 		t.Fatal("cpu_iowait_percent not found in points")
+	}
+	if counterModes != 8 {
+		t.Fatalf("cpu_seconds_total count = %d, want 8", counterModes)
 	}
 	if iowaitPt.Value != 10.0 {
 		t.Errorf("iowait = %v, want 10.0", iowaitPt.Value)
@@ -147,7 +165,52 @@ func TestCPUCollector_IowaitTimesReaderError(t *testing.T) {
 		t.Fatalf("Collect: %v", err)
 	}
 	if len(pts) != 1 {
-		t.Errorf("points count = %d, want 1 (times error → no iowait)", len(pts))
+		t.Errorf("points count = %d, want 1 (times error → no cpu_seconds_total and no iowait)", len(pts))
+	}
+}
+
+func TestCPUCollector_EmitsCPUModeCounters(t *testing.T) {
+	tr := &mockCPUTimesReader{
+		values: []collector.CPUTimesStat{{
+			User: 100, System: 50, Idle: 800, Nice: 20, Iowait: 10, Irq: 2, Softirq: 3, Steal: 4,
+		}},
+	}
+	c := collector.NewCPUCollectorWithReaders(&mockCPUReader{values: []float64{25.0}}, tr)
+
+	pts, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	want := map[string]float64{
+		"user":    100,
+		"system":  50,
+		"idle":    800,
+		"nice":    20,
+		"iowait":  10,
+		"irq":     2,
+		"softirq": 3,
+		"steal":   4,
+	}
+
+	got := map[string]float64{}
+	for _, p := range pts {
+		if p.Name != "cpu_seconds_total" {
+			continue
+		}
+		got[p.Labels["mode"]] = p.Value
+		if p.Type != metrics.Counter {
+			t.Errorf("cpu_seconds_total{%q} type = %v, want Counter", p.Labels["mode"], p.Type)
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("cpu_seconds_total modes = %d, want %d", len(got), len(want))
+	}
+	for mode, wantValue := range want {
+		if got[mode] != wantValue {
+			t.Errorf("cpu_seconds_total{mode=%q} = %v, want %v", mode, got[mode], wantValue)
+		}
 	}
 }
 

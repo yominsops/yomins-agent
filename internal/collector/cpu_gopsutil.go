@@ -22,10 +22,16 @@ func (realCPUReader) TimesWithContext(ctx context.Context, percpu bool) ([]CPUTi
 	result := make([]CPUTimesStat, len(times))
 	for i, t := range times {
 		result[i] = CPUTimesStat{
-			User:   t.User,
-			System: t.System,
-			Idle:   t.Idle,
-			Iowait: t.Iowait,
+			User:      t.User,
+			System:    t.System,
+			Idle:      t.Idle,
+			Nice:      t.Nice,
+			Iowait:    t.Iowait,
+			Irq:       t.Irq,
+			Softirq:   t.Softirq,
+			Steal:     t.Steal,
+			Guest:     t.Guest,
+			GuestNice: t.GuestNice,
 		}
 	}
 	return result, nil

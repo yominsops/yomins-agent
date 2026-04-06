@@ -16,10 +16,16 @@ type CPUReader interface {
 
 // CPUTimesStat holds cumulative CPU time counters (seconds since boot).
 type CPUTimesStat struct {
-	User   float64
-	System float64
-	Idle   float64
-	Iowait float64
+	User      float64
+	System    float64
+	Idle      float64
+	Nice      float64
+	Iowait    float64
+	Irq       float64
+	Softirq   float64
+	Steal     float64
+	Guest     float64
+	GuestNice float64
 }
 
 // CPUTimesReader abstracts the gopsutil cpu.Times call for testability.
@@ -78,6 +84,7 @@ func (c *CPUCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, erro
 	}
 
 	if c.timesReader != nil {
+		pts = append(pts, c.cpuSecondsTotal(ctx)...)
 		if iowait, ok := c.computeIowait(ctx); ok {
 			pts = append(pts, metrics.MetricPoint{
 				Name:  "cpu_iowait_percent",
@@ -89,6 +96,43 @@ func (c *CPUCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, erro
 	}
 
 	return pts, nil
+}
+
+func (c *CPUCollector) cpuSecondsTotal(ctx context.Context) []metrics.MetricPoint {
+	times, err := c.timesReader.TimesWithContext(ctx, false)
+	if err != nil || len(times) == 0 {
+		return nil
+	}
+
+	cur := times[0]
+	type modeValue struct {
+		mode  string
+		value float64
+	}
+	modes := []modeValue{
+		{mode: "user", value: cur.User},
+		{mode: "system", value: cur.System},
+		{mode: "idle", value: cur.Idle},
+		{mode: "nice", value: cur.Nice},
+		{mode: "iowait", value: cur.Iowait},
+		{mode: "irq", value: cur.Irq},
+		{mode: "softirq", value: cur.Softirq},
+		{mode: "steal", value: cur.Steal},
+	}
+
+	pts := make([]metrics.MetricPoint, 0, len(modes))
+	for _, mv := range modes {
+		pts = append(pts, metrics.MetricPoint{
+			Name:  "cpu_seconds_total",
+			Help:  "Total CPU time spent in each mode since boot",
+			Type:  metrics.Counter,
+			Value: mv.value,
+			Labels: map[string]string{
+				"mode": mv.mode,
+			},
+		})
+	}
+	return pts
 }
 
 // computeIowait fetches current CPU times, computes iowait percentage against the
@@ -112,12 +156,15 @@ func (c *CPUCollector) computeIowait(ctx context.Context) (float64, bool) {
 		return 0, false
 	}
 
-	totalDelta := (cur.User + cur.System + cur.Idle + cur.Iowait) -
-		(prev.User + prev.System + prev.Idle + prev.Iowait)
+	totalDelta := cpuTimeTotal(cur) - cpuTimeTotal(*prev)
 	if totalDelta <= 0 {
 		return 0, false
 	}
 
 	iowaitDelta := cur.Iowait - prev.Iowait
 	return (iowaitDelta / totalDelta) * 100.0, true
+}
+
+func cpuTimeTotal(t CPUTimesStat) float64 {
+	return t.User + t.System + t.Idle + t.Nice + t.Iowait + t.Irq + t.Softirq + t.Steal
 }
