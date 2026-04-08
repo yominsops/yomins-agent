@@ -67,6 +67,8 @@ func agentLabelPairs(ms MetricSet) []*dto.LabelPair {
 		labelPair("agent_id", ms.AgentID),
 		labelPair("hostname", ms.Hostname),
 		labelPair("source", ms.Source),
+		labelPair("target_name", ms.AgentID),
+		labelPair("target_type", "system"),
 	}
 }
 
