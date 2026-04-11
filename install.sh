@@ -398,12 +398,36 @@ do_uninstall() {
 }
 
 # ---------------------------------------------------------------------------
+# Hostname resolution check
+# ---------------------------------------------------------------------------
+# sudo warns "unable to resolve host <hostname>" when the machine's own
+# hostname is not resolvable. This is harmless but alarming to end users.
+# Since we already run as root, we can fix it by adding the hostname to
+# /etc/hosts before it causes concern.
+ensure_hostname_resolvable() {
+    local hostname
+    hostname="$(hostname 2>/dev/null)" || return 0
+    [[ -n "$hostname" ]] || return 0
+
+    # If getent/hostname -I can resolve it, nothing to do.
+    if getent hosts "$hostname" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Not resolvable — add a loopback entry to /etc/hosts.
+    info "Hostname '${hostname}' not in /etc/hosts — adding loopback entry to suppress sudo warnings..."
+    printf '127.0.0.1\t%s\n' "$hostname" >> /etc/hosts
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 main() {
     parse_args "$@"
 
     [[ "$(id -u)" -eq 0 ]] || die "This script must be run as root (use sudo)."
+
+    ensure_hostname_resolvable
 
     if [[ "$DO_UNINSTALL" == true ]]; then
         do_uninstall
