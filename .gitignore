@@ -1,0 +1,29 @@
+*.test
+/bin/
+/build/
+/dist/
+vendor/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Env files
+.env
+.env.*
+
+# Temporary files
+tmp/
+*.tmp
+
+# Requests
+REQUEST.*
