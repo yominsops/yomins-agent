@@ -219,7 +219,7 @@ docker run -d \
   -v yomins-agent-state:/var/lib/yomins-agent \
   -e YOMINS_SERVER=https://ingest.yominsops.com \
   -e YOMINS_TOKEN=<PROJECT_TOKEN> \
-  ghcr.io/yominsops/yomins-agent:latest
+  yominsops/yomins-agent:latest
 ```
 
 The named volume `yomins-agent-state` persists the `agent_id` across container restarts.

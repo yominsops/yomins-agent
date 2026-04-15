@@ -106,7 +106,7 @@ docker run -d \
   -v yomins-agent-state:/var/lib/yomins-agent \
   -e YOMINS_SERVER=https://ingest.yominsops.com \
   -e YOMINS_TOKEN=<YOUR_PROJECT_TOKEN> \
-  ghcr.io/yominsops/agent:latest
+  yominsops/yomins-agent:latest
 ```
 
 The named volume `yomins-agent-state` preserves the agent's identity across restarts.
@@ -118,7 +118,7 @@ The named volume `yomins-agent-state` preserves the agent's identity across rest
 ```yaml
 services:
   yomins-agent:
-    image: ghcr.io/yominsops/agent:latest
+    image: yominsops/yomins-agent:latest
     restart: unless-stopped
     pid: host
     volumes:
