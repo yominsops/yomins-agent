@@ -21,9 +21,9 @@ ExecStartPre=+/usr/local/lib/yomins-agent/apply-upgrade.sh
 
 ExecStart=/usr/local/bin/yomins-agent
 
-# systemd automatically creates /var/lib/yomins-agent and sets ownership
+# systemd automatically creates /var/lib/yomins/agent and sets ownership
 # to the service user. This is where agent_id is persisted.
-StateDirectory=yomins-agent
+StateDirectory=yomins/agent
 StateDirectoryMode=0700
 
 # Security hardening
@@ -32,7 +32,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/
-ReadWritePaths=/var/lib/yomins-agent
+ReadWritePaths=/var/lib/yomins/agent
 
 # Restart=always so that a clean exit (os.Exit(0)) after staging an upgrade
 # also triggers a restart, allowing apply-upgrade.sh to apply the new binary.

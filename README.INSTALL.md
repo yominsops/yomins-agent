@@ -103,7 +103,7 @@ docker run -d \
   -v /proc:/host/proc:ro \
   -v /sys:/host/sys:ro \
   -v /:/rootfs:ro \
-  -v yomins-agent-state:/var/lib/yomins-agent \
+  -v yomins-agent-state:/var/lib/yomins/agent \
   -e YOMINS_SERVER=https://ingest.yominsops.com \
   -e YOMINS_TOKEN=<YOUR_PROJECT_TOKEN> \
   yominsops/yomins-agent:latest
@@ -125,7 +125,7 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
-      - yomins-agent-state:/var/lib/yomins-agent
+      - yomins-agent-state:/var/lib/yomins/agent
     environment:
       YOMINS_SERVER: https://ingest.yominsops.com
       YOMINS_TOKEN: <YOUR_PROJECT_TOKEN>
@@ -160,7 +160,7 @@ systemctl disable --now yomins-agent
 rm /etc/systemd/system/yomins-agent.service
 systemctl daemon-reload
 rm /usr/local/bin/yomins-agent
-rm -rf /etc/yomins-agent /usr/local/lib/yomins-agent /var/lib/yomins-agent
+rm -rf /etc/yomins-agent /usr/local/lib/yomins-agent /var/lib/yomins/agent
 userdel yomins-agent
 ```
 

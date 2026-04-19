@@ -36,7 +36,7 @@ SERVICE_NAME="yomins-agent"
 INSTALL_DIR="/usr/local/bin"
 UPGRADE_LIB_DIR="/usr/local/lib/yomins-agent"
 CONFIG_DIR="/etc/yomins-agent"
-STATE_DIR="/var/lib/yomins-agent"
+STATE_DIR="/var/lib/yomins/agent"
 SYSTEMD_DIR="/etc/systemd/system"
 SERVICE_FILE="${SYSTEMD_DIR}/${SERVICE_NAME}.service"
 RELEASES_BASE="https://github.com/yominsops/yomins-agent/releases"
@@ -268,6 +268,7 @@ write_config() {
 YOMINS_SERVER=${AGENT_SERVER}
 YOMINS_TOKEN=${AGENT_TOKEN}
 YOMINS_INTERVAL=${AGENT_INTERVAL}
+YOMINS_STATE_DIR=${STATE_DIR}
 EOF
     chmod 600 "$env_file"
     chown root:root "$env_file"
@@ -290,6 +291,40 @@ install_upgrade_script() {
         chmod 755 "${UPGRADE_LIB_DIR}/apply-upgrade.sh"
     fi
     chown root:root "${UPGRADE_LIB_DIR}/apply-upgrade.sh"
+}
+
+# ---------------------------------------------------------------------------
+# State directory migration (old path → new path on upgrade re-runs)
+# ---------------------------------------------------------------------------
+migrate_state_dir() {
+    local old_dir="/var/lib/yomins-agent"
+    [[ "$IS_UPGRADE" == true ]] || return 0
+    [[ -d "$old_dir" ]]         || return 0
+
+    info "Migrating state directory: ${old_dir} → ${STATE_DIR}..."
+
+    mkdir -p "${STATE_DIR}/upgrade"
+    chown "${SERVICE_NAME}:${SERVICE_NAME}" "$STATE_DIR" "${STATE_DIR}/upgrade"
+    chmod 700 "$STATE_DIR" "${STATE_DIR}/upgrade"
+
+    if [[ -f "${old_dir}/agent_id" ]]; then
+        cp "${old_dir}/agent_id" "${STATE_DIR}/agent_id"
+        chown "${SERVICE_NAME}:${SERVICE_NAME}" "${STATE_DIR}/agent_id"
+        info "Preserved agent_id → ${STATE_DIR}/agent_id"
+    fi
+
+    # Pin new path in env file (add or replace YOMINS_STATE_DIR line).
+    local env_file="${CONFIG_DIR}/env"
+    if [[ -f "$env_file" ]]; then
+        if grep -q "^YOMINS_STATE_DIR=" "$env_file"; then
+            sed -i "s|^YOMINS_STATE_DIR=.*|YOMINS_STATE_DIR=${STATE_DIR}|" "$env_file"
+        else
+            echo "YOMINS_STATE_DIR=${STATE_DIR}" >> "$env_file"
+        fi
+        info "Pinned YOMINS_STATE_DIR in ${env_file}"
+    fi
+
+    success "State directory migrated. Old directory ${old_dir} can be removed manually if desired."
 }
 
 install_service() {
@@ -463,6 +498,7 @@ main() {
     confirm
     download_binary
     ensure_user
+    migrate_state_dir
     install_binary
     install_upgrade_script
     write_config

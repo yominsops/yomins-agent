@@ -48,7 +48,7 @@ func Load() (*Config, error) {
 	fs.BoolVar(&cfg.DisableFilesystems, "disable-filesystems", false, "Disable filesystem/disk metrics (YOMINS_DISABLE_FILESYSTEMS)")
 	fs.BoolVar(&cfg.DisableNetwork, "disable-network", false, "Disable network interface metrics (YOMINS_DISABLE_NETWORK)")
 	fs.BoolVar(&cfg.InsecureSkipVerify, "insecure-skip-verify", false, "Skip TLS certificate verification (dev only)")
-	fs.StringVar(&cfg.StateDir, "state-dir", "/var/lib/yomins-agent", "Directory for persistent agent state (YOMINS_STATE_DIR)")
+	fs.StringVar(&cfg.StateDir, "state-dir", "/var/lib/yomins/agent", "Directory for persistent agent state (YOMINS_STATE_DIR)")
 	fs.BoolVar(&cfg.DisableAutoUpgrade, "disable-auto-upgrade", false, "Disable automatic self-upgrade check (YOMINS_DISABLE_AUTO_UPGRADE)")
 	fs.DurationVar(&cfg.AutoUpgradeInterval, "auto-upgrade-interval", 24*time.Hour, "How often to check for a newer version (YOMINS_AUTO_UPGRADE_INTERVAL)")
 

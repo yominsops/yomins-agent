@@ -165,7 +165,7 @@ func runUninstall() error {
 		binaryPath  = "/usr/local/bin/yomins-agent"
 		configDir   = "/etc/yomins-agent"
 		libDir      = "/usr/local/lib/yomins-agent"
-		stateDir    = "/var/lib/yomins-agent"
+		stateDir    = "/var/lib/yomins/agent"
 	)
 
 	fmt.Printf("\nThis will remove the yomins-agent service, binary, config, and state from this system.\n\n")

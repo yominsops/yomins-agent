@@ -177,7 +177,7 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--disable-network` | `YOMINS_DISABLE_NETWORK` | `false` | Disable network metrics entirely |
 | `--exclude-mountpoints` | `YOMINS_EXCLUDE_MOUNTPOINTS` | *(none)* | Comma-separated mountpoints to skip (e.g. `/proc,/sys,/dev/shm`) |
 | `--exclude-interfaces` | `YOMINS_EXCLUDE_INTERFACES` | *(none)* | Comma-separated interfaces to skip (e.g. `docker0,virbr0`); loopback is always excluded |
-| `--state-dir` | `YOMINS_STATE_DIR` | `/var/lib/yomins-agent` | Persistent state directory |
+| `--state-dir` | `YOMINS_STATE_DIR` | `/var/lib/yomins/agent` | Persistent state directory |
 | `--disable-auto-upgrade` | `YOMINS_DISABLE_AUTO_UPGRADE` | `false` | Disable automatic self-upgrade |
 | `--auto-upgrade-interval` | `YOMINS_AUTO_UPGRADE_INTERVAL` | `24h` | How often to check for a newer version |
 | `--disable-kernelcare-info` | `YOMINS_DISABLE_KERNELCARE_INFO` | `false` | Disable KernelCare detection (skip `kernelcare_info` metric) |
@@ -216,7 +216,7 @@ docker run -d \
   -v /proc:/host/proc:ro \
   -v /sys:/host/sys:ro \
   -v /:/rootfs:ro \
-  -v yomins-agent-state:/var/lib/yomins-agent \
+  -v yomins-agent-state:/var/lib/yomins/agent \
   -e YOMINS_SERVER=https://ingest.yominsops.com \
   -e YOMINS_TOKEN=<PROJECT_TOKEN> \
   yominsops/yomins-agent:latest
@@ -239,7 +239,7 @@ No HTTPS or certificates are needed — a reverse proxy handles TLS termination 
 The agent upgrades itself automatically. On startup and every `--auto-upgrade-interval` (default: 24 h) it checks the GitHub Releases API. When a newer version is found:
 
 1. The binary and its SHA-256 checksum are downloaded and the hash is verified.
-2. The new binary is staged in the agent's state directory (`/var/lib/yomins-agent/upgrade/`).
+2. The new binary is staged in the agent's state directory (`/var/lib/yomins/agent/upgrade/`).
 3. The agent exits cleanly; systemd restarts it.
 4. On the next start a privileged pre-start script (`apply-upgrade.sh`) atomically replaces `/usr/local/bin/yomins-agent` before the agent process launches.
 

@@ -18,7 +18,7 @@
 
 set -eu
 
-UPGRADE_DIR="/var/lib/yomins-agent/upgrade"
+UPGRADE_DIR="/var/lib/yomins/agent/upgrade"
 BINARY="/usr/local/bin/yomins-agent"
 BACKUP="${UPGRADE_DIR}/backup"
 PENDING="${UPGRADE_DIR}/pending"

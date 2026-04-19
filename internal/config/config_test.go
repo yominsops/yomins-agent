@@ -28,8 +28,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want info", cfg.LogLevel)
 	}
-	if cfg.StateDir != "/var/lib/yomins-agent" {
-		t.Errorf("StateDir = %q, want /var/lib/yomins-agent", cfg.StateDir)
+	if cfg.StateDir != "/var/lib/yomins/agent" {
+		t.Errorf("StateDir = %q, want /var/lib/yomins/agent", cfg.StateDir)
 	}
 }
 
