@@ -11,20 +11,20 @@ import (
 
 // Config holds all agent runtime configuration.
 type Config struct {
-	Version             bool
-	Uninstall           bool
-	DryRun              bool
-	Server              string
-	Token               string
-	Interval            time.Duration
-	LogLevel            string
-	HostnameOverride    string
-	DisableFilesystems  bool
-	DisableNetwork      bool
-	InsecureSkipVerify  bool
-	StateDir            string
-	DisableAutoUpgrade  bool
-	AutoUpgradeInterval time.Duration
+	Version                bool
+	Uninstall              bool
+	DryRun                 bool
+	Server                 string
+	Token                  string
+	Interval               time.Duration
+	LogLevel               string
+	HostnameOverride       string
+	DisableFilesystems     bool
+	DisableNetwork         bool
+	InsecureSkipVerify     bool
+	StateDir               string
+	DisableAutoUpgrade     bool
+	AutoUpgradeInterval    time.Duration
 	ExcludeMountpoints     []string
 	ExcludeInterfaces      []string
 	DisableKernelCareInfo  bool   // --disable-kernelcare-info / YOMINS_DISABLE_KERNELCARE_INFO
@@ -40,7 +40,7 @@ func Load() (*Config, error) {
 	fs.BoolVar(&cfg.Version, "version", false, "Print version information and exit")
 	fs.BoolVar(&cfg.Uninstall, "uninstall", false, "Remove the agent, its service, config, and state from this system (requires root)")
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "Print collected metrics to stdout instead of sending to the server (no --server or --token required)")
-	fs.StringVar(&cfg.Server, "server", "", "YominsOps ingestion endpoint URL (YOMINS_SERVER)")
+	fs.StringVar(&cfg.Server, "server", "", "Yomins ingestion endpoint URL (YOMINS_SERVER)")
 	fs.StringVar(&cfg.Token, "token", "", "Project-scoped authentication token (YOMINS_TOKEN)")
 	fs.DurationVar(&cfg.Interval, "interval", 60*time.Second, "Metrics push interval (YOMINS_INTERVAL)")
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error (YOMINS_LOG_LEVEL)")

@@ -1,5 +1,5 @@
 [Unit]
-Description=YominsOps Metrics Agent
+Description=Yomins Metrics Agent
 Documentation=https://docs.yominsops.com/agent
 After=network-online.target
 Wants=network-online.target

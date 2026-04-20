@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+### Paths
+CONFIG_FILE="/etc/yomins/backup.conf"
+ENV_FILE="/etc/yomins/backup.env"
+
+LOG_DIR="/var/log/yomins"
+STATE_DIR="/var/lib/yomins/backup"
+
+LOG_FILE="${LOG_DIR}/backup.log"
+REPORT_FILE="${STATE_DIR}/last_run.json"
+LOCK_FILE="/var/run/yomins-backup.lock"
+
+DATE_RFC3339="+%Y-%m-%dT%H:%M:%S%:z"
+
+mkdir -p "${LOG_DIR}" "${STATE_DIR}"
+
+### Logging
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+log() {
+    echo "[$(date "${DATE_RFC3339}")] $*"
+}
+
+### Locking
+exec 9>"${LOCK_FILE}"
+flock -n 9 || {
+    log "Another backup process is running"
+    exit 1
+}
+
+### Load config
+if [[ -f "${ENV_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${ENV_FILE}"
+fi
+
+if [[ -f "${CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${CONFIG_FILE}"
+fi
+
+### Validate required vars
+: "${RESTIC_REPOSITORY:?Missing RESTIC_REPOSITORY}"
+if [[ -z "${RESTIC_PASSWORD:-}" && -z "${RESTIC_PASSWORD_FILE:-}" ]]; then
+    echo "Either RESTIC_PASSWORD or RESTIC_PASSWORD_FILE must be set"
+    exit 1
+fi
+
+START_TIME=$(date "${DATE_RFC3339}")
+
+### Error handler
+error_handler() {
+    local exit_code=$?
+    local line=$1
+
+    END_TIME=$(date "${DATE_RFC3339}")
+
+    jq -n \
+        --arg status "error" \
+        --arg start "${START_TIME}" \
+        --arg end_time "${END_TIME}" \
+        --arg line "${line}" \
+        --arg log "$(tail -n 50 "${LOG_FILE}")" \
+        '{
+            status: $status,
+            start_time: $start,
+            end_time: $end_time,
+            error_line: ($line|tonumber),
+            log_tail: $log
+        }' > "${REPORT_FILE}"
+
+    exit $exit_code
+}
+
+trap 'error_handler $LINENO' ERR
+
+log "===== START BACKUP ====="
+
+### MySQL dump
+if [[ "${BACKUP_MYSQL:-false}" == "true" ]]; then
+    mkdir -p "${MYSQL_BACKUP_DIR}"
+
+    DBS=$(mysql -sN -e "SHOW DATABASES" | grep -Ev "${MYSQL_IGNORE_REGEX}")
+
+    for db in ${DBS}; do
+        log "Dump DB: $db"
+
+        mysqldump \
+            --single-transaction \
+            --quick \
+            --databases "$db" \
+            > "${MYSQL_BACKUP_DIR}/${db}.sql"
+    done
+
+    pt-show-grants > "${MYSQL_BACKUP_DIR}/_users.sql"
+fi
+
+### Check restic access
+log "Checking restic repository..."
+
+if ! restic snapshots >/dev/null 2>&1; then
+    log "Cannot access restic repository"
+    exit 1
+fi
+
+### Files backup via restic
+log "Running restic backup..."
+
+RESTIC_ARGS=()
+
+for path in "${BACKUP_PATHS[@]}"; do
+    RESTIC_ARGS+=("$path")
+done
+
+for ex in "${EXCLUDES[@]}"; do
+    RESTIC_ARGS+=(--exclude "$ex")
+done
+
+RESTIC_OUTPUT=$(restic backup "${RESTIC_ARGS[@]}" --json || true)
+
+STAT=$(echo "${RESTIC_OUTPUT}" | jq -c 'select(.message_type=="summary")')
+
+if [[ -z "${STAT}" ]]; then
+    log "Restic failed. Output:"
+    echo "${RESTIC_OUTPUT}" | tail -n 20
+    exit 1
+fi
+
+### Retention
+restic forget \
+    --keep-daily "${KEEP_DAILY}" \
+    --keep-weekly "${KEEP_WEEKLY}" \
+    --keep-monthly "${KEEP_MONTHLY}" \
+    --prune
+
+restic check
+
+### Snapshots
+SNAPSHOTS=$(restic snapshots --json | jq '[.[].time]')
+
+END_TIME=$(date "${DATE_RFC3339}")
+
+### Success report
+jq -n \
+    --arg status "success" \
+    --arg start "${START_TIME}" \
+    --arg end_time "${END_TIME}" \
+    --argjson stat "${STAT:-null}" \
+    --argjson snapshots "${SNAPSHOTS}" \
+    '{
+        status: $status,
+        start_time: $start,
+        end_time: $end_time,
+        stat: $stat,
+        snapshots: $snapshots
+    }' > "${REPORT_FILE}"
+
+log "===== BACKUP SUCCESS ====="

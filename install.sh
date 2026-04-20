@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# YominsOps Agent — one-command installer / upgrader
+# Yomins Agent — one-command installer / upgrader
 #
 # Fresh install:
 #   curl -fsSL https://get.yominsops.com/agent | sudo bash -s -- --token <TOKEN>
@@ -429,7 +429,7 @@ do_uninstall() {
     userdel "$SERVICE_NAME" 2>/dev/null || true
 
     printf "\n"
-    success "YominsOps agent removed."
+    success "Yomins agent removed."
 }
 
 # ---------------------------------------------------------------------------

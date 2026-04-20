@@ -128,6 +128,7 @@ func buildCollectors(cfg *config.Config) []collector.Collector {
 		collector.NewCPUCollector(),
 		collector.NewMemoryCollector(),
 		collector.NewSystemCollector(),
+		collector.NewBackupCollector(),
 		collector.NewInfoCollector(collector.InfoConfig{
 			DisableKernelCareInfo:  cfg.DisableKernelCareInfo,
 			VirtualizationOverride: cfg.VirtualizationOverride,
@@ -202,17 +203,17 @@ func runUninstall() error {
 	}
 
 	fmt.Println()
-	run("Stopping service",      func() error { return runCmd("systemctl", "stop", serviceName) })
-	run("Disabling service",     func() error { return runCmd("systemctl", "disable", serviceName) })
+	run("Stopping service", func() error { return runCmd("systemctl", "stop", serviceName) })
+	run("Disabling service", func() error { return runCmd("systemctl", "disable", serviceName) })
 	run("Removing service file", func() error { return os.Remove(serviceFile) })
-	run("Reloading systemd",     func() error { return runCmd("systemctl", "daemon-reload") })
-	run("Removing config dir",   func() error { return os.RemoveAll(configDir) })
-	run("Removing lib dir",      func() error { return os.RemoveAll(libDir) })
-	run("Removing state dir",    func() error { return os.RemoveAll(stateDir) })
-	run("Removing binary",       func() error { return os.Remove(binaryPath) })
-	run("Removing system user",  func() error { return runCmd("userdel", serviceName) })
+	run("Reloading systemd", func() error { return runCmd("systemctl", "daemon-reload") })
+	run("Removing config dir", func() error { return os.RemoveAll(configDir) })
+	run("Removing lib dir", func() error { return os.RemoveAll(libDir) })
+	run("Removing state dir", func() error { return os.RemoveAll(stateDir) })
+	run("Removing binary", func() error { return os.Remove(binaryPath) })
+	run("Removing system user", func() error { return runCmd("userdel", serviceName) })
 
-	fmt.Println("\nYominsOps agent removed.")
+	fmt.Println("\nYomins agent removed.")
 	return nil
 }
 

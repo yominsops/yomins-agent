@@ -1,11 +1,11 @@
-# YominsOps Metrics Agent
+# Yomins Metrics Agent
 
-A lightweight Go agent that collects host-level system metrics and pushes them to the YominsOps monitoring stack. The agent requires no inbound ports and no SSH access — it pushes outbound over HTTPS.
+A lightweight Go agent that collects host-level system metrics and pushes them to the Yomins monitoring stack. The agent requires no inbound ports and no SSH access — it pushes outbound over HTTPS.
 
 ## How it works
 
 ```
-[Your Server]                          [YominsOps]
+[Your Server]                          [Yomins]
   yomins-agent
     → collects CPU, RAM, disk,
       network, system, and server
