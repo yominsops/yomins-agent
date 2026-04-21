@@ -112,6 +112,18 @@ Static/semi-static metadata collected once per push cycle. Each metric is omitte
 
 > **`dmidecode` note:** Install with `apt install dmidecode` or `yum install dmidecode`. The agent must run as root (or with `CAP_SYS_RAWIO`) for dmidecode to access DMI tables. When unavailable, `memory_hardware_info` (total RAM) is still emitted from `/proc/meminfo`; only the per-DIMM `memory_module_info` metrics are skipped.
 
+### Backup
+
+Metrics from the [yomins-backup](yomins-backup) report file (`/var/lib/yomins/backup/last_run.json`). If the file does not exist the collector emits nothing — this is expected on hosts where `yomins-backup` is not installed.
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `yomins_backup_last_status` | Gauge | Status of the last backup run (1 = success, 0 = error) |
+| `yomins_backup_last_duration_seconds` | Gauge | Duration of the last backup run in seconds |
+| `yomins_backup_last_success_timestamp` | Gauge | Unix timestamp of the last successful backup; omitted if the last run failed |
+| `yomins_backup_files_total` | Gauge | Total files processed in the last backup; omitted if the last run failed |
+| `yomins_backup_bytes_total` | Gauge | Total bytes processed in the last backup; omitted if the last run failed |
+
 ### Agent self-metrics
 | Metric | Type | Description |
 |--------|------|-------------|
