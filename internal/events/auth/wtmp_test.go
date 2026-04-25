@@ -19,9 +19,9 @@ func buildRecord(utType int16, pid int32, line, user, host string, tvSec, tvUsec
 	// ut_id at offset 40 (4 bytes) — leave zero
 	copyField(buf[44:], user, 32)
 	copyField(buf[76:], host, 256)
-	// ut_exit at 332 (4), ut_session at 336 (4), padding at 340 (4)
-	binary.LittleEndian.PutUint32(buf[344:], uint32(tvSec))
-	binary.LittleEndian.PutUint32(buf[348:], uint32(tvUsec))
+	// ut_exit at 332 (4), ut_session at 336 (4), ut_tv.tv_sec at 340 (4), ut_tv.tv_usec at 344 (4)
+	binary.LittleEndian.PutUint32(buf[340:], uint32(tvSec))
+	binary.LittleEndian.PutUint32(buf[344:], uint32(tvUsec))
 	// ut_addr_v6 at 352 (16) and __unused at 368 (20) — leave zero
 	return buf
 }
