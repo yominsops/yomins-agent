@@ -21,7 +21,7 @@ A lightweight Go agent that collects host-level system metrics and security even
 The agent runs two independent pipelines:
 
 - **Metrics pipeline** — collects numeric measurements on a configurable interval (default: 60 s) and pushes them as Prometheus text format.
-- **Event pipeline** — detects discrete security-relevant changes (logins, new processes, new listening ports, OOM kills) and buffers them as structured JSON events. The event pipeline runs continuously in background goroutines alongside the metrics loop and is independent of the push interval.
+- **Event pipeline** — detects discrete security-relevant changes (logins, new processes, new listening ports, OOM kills) and buffers them as structured JSON events. Buffered events are flushed to the server's `/events` endpoint in batches on a configurable interval (default: 10 s), independently of the metrics push interval.
 
 The agent identifies itself with a project-scoped token. The server resolves the token to a project, appends authoritative labels (`project_id`, `customer_id`), and stores the data. **The agent never controls project identity** — that is always enforced server-side.
 
@@ -325,6 +325,8 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--wtmp-path` | `YOMINS_WTMP_PATH` | `/var/log/wtmp` | Path to the wtmp file used for login/logout event collection |
 | `--auth-log-path` | `YOMINS_AUTH_LOG_PATH` | `/var/log/auth.log` | Path to the auth log file used for failed-login and sudo events; falls back to `/var/log/secure` then to systemd journal when the file does not exist |
 | `--suspicious-patterns` | `YOMINS_SUSPICIOUS_PATTERNS` | *(built-in defaults)* | Comma-separated regex patterns for suspicious process detection; replaces the built-in list |
+| `--event-flush-interval` | `YOMINS_EVENT_FLUSH_INTERVAL` | `10s` | How often to flush buffered events to the server |
+| `--event-batch-size` | `YOMINS_EVENT_BATCH_SIZE` | `200` | Maximum number of events per HTTP request |
 | `--insecure-skip-verify` | — | `false` | Skip TLS verification (**dev only**) |
 | `--dry-run` | — | `false` | Print collected metrics to stdout instead of sending to the server; `--server` and `--token` are not required |
 
