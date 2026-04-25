@@ -25,13 +25,6 @@ func makeEvent(id string) events.Event {
 	}
 }
 
-func newBuf(evts ...events.Event) *events.RingBuffer {
-	buf := events.NewRingBuffer(1000)
-	for _, e := range evts {
-		buf.Push(e)
-	}
-	return buf
-}
 
 func TestEventHTTPTransport_FlushEmptyBuffer(t *testing.T) {
 	var calls int32
