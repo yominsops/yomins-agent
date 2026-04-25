@@ -15,6 +15,7 @@ import (
 	"github.com/yominsops/yomins-agent/internal/events/network"
 	evtprocess "github.com/yominsops/yomins-agent/internal/events/process"
 	"github.com/yominsops/yomins-agent/internal/events/system"
+	"github.com/yominsops/yomins-agent/internal/transport"
 	"github.com/yominsops/yomins-agent/internal/version"
 )
 
@@ -79,6 +80,23 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 			slog.Error("event pipeline exited", "error", err)
 		}
 	}()
+
+	// Start the flush transport only when we have a server and token configured
+	// (i.e. not in dry-run mode).
+	if cfg.Server != "" && cfg.Token != "" {
+		et := transport.NewEventHTTPTransport(transport.EventFlushConfig{
+			Server:             cfg.Server,
+			Token:              cfg.Token,
+			FlushInterval:      cfg.EventFlushInterval,
+			BatchSize:          cfg.EventBatchSize,
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+		}, pipeline.Buffer())
+		go func() {
+			if err := et.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("event transport exited", "error", err)
+			}
+		}()
+	}
 }
 
 // resolveHostIP returns the first non-loopback IPv4 address found on the host.

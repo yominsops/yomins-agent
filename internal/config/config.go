@@ -41,6 +41,10 @@ type Config struct {
 	WtmpPath             string   // default: /var/log/wtmp
 	AuthLogPath          string   // default: /var/log/auth.log
 	SuspiciousPatterns   []string // CSV; defaults defined in process collector
+
+	// Event transport
+	EventFlushInterval time.Duration // default: 10s
+	EventBatchSize     int           // default: 200
 }
 
 // Load parses configuration from CLI flags and environment variables.
@@ -85,6 +89,10 @@ func Load() (*Config, error) {
 	fs.StringVar(&cfg.WtmpPath, "wtmp-path", "/var/log/wtmp", "Path to wtmp file for login/logout event collection (YOMINS_WTMP_PATH)")
 	fs.StringVar(&cfg.AuthLogPath, "auth-log-path", "/var/log/auth.log", "Path to auth log file for failed login and sudo events (YOMINS_AUTH_LOG_PATH)")
 	fs.StringVar(&suspiciousPatternsRaw, "suspicious-patterns", "", "Comma-separated regex patterns for suspicious process detection (YOMINS_SUSPICIOUS_PATTERNS)")
+
+	// Event transport flags
+	fs.DurationVar(&cfg.EventFlushInterval, "event-flush-interval", 10*time.Second, "How often to flush buffered events to the server (YOMINS_EVENT_FLUSH_INTERVAL)")
+	fs.IntVar(&cfg.EventBatchSize, "event-batch-size", 200, "Maximum number of events per HTTP request (YOMINS_EVENT_BATCH_SIZE)")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, fmt.Errorf("parse flags: %w", err)
@@ -231,6 +239,20 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 	if !explicit["auth-log-path"] {
 		if v := os.Getenv("YOMINS_AUTH_LOG_PATH"); v != "" {
 			cfg.AuthLogPath = v
+		}
+	}
+	if !explicit["event-flush-interval"] {
+		if v := os.Getenv("YOMINS_EVENT_FLUSH_INTERVAL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				cfg.EventFlushInterval = d
+			}
+		}
+	}
+	if !explicit["event-batch-size"] {
+		if v := os.Getenv("YOMINS_EVENT_BATCH_SIZE"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				cfg.EventBatchSize = n
+			}
 		}
 	}
 }
