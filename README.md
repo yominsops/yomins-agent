@@ -411,8 +411,8 @@ internal/
   metrics/              — MetricPoint types and Prometheus text encoding
   collector/            — Collector interface, Registry, and per-subsystem collectors
   transport/            — HTTP transports:
-                           transport.go     — metrics push (Prometheus text → ingest /ingest)
-                           events.go        — event flush (JSON batches → ingest /events)
+                           transport.go     — metrics push (Prometheus text → ingest /v1/push/metrics)
+                           events.go        — event flush (JSON batches → ingest /v1/push/events)
   agent/                — orchestration loop (collect → encode → push)
   upgrade/              — self-upgrade: version check, download, staging, rollback
 systemd/                — systemd service unit and apply-upgrade.sh helper script

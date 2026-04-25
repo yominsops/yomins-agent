@@ -263,6 +263,8 @@ func (c *Config) Validate() error {
 	if !c.DryRun {
 		if c.Server == "" {
 			errs = append(errs, "--server (or YOMINS_SERVER) is required")
+		} else {
+			c.Server = strings.TrimRight(c.Server, "/")
 		}
 		if c.Token == "" {
 			errs = append(errs, "--token (or YOMINS_TOKEN) is required")

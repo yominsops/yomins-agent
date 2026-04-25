@@ -83,7 +83,7 @@ func (t *HTTPTransport) Push(ctx context.Context, ms metrics.MetricSet) error {
 
 // do performs a single HTTP POST attempt.
 func (t *HTTPTransport) do(ctx context.Context, payload []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.cfg.Server, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.cfg.Server+"/metrics", bytes.NewReader(payload))
 	if err != nil {
 		return backoff.Permanent(fmt.Errorf("create request: %w", err))
 	}
