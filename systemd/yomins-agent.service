@@ -10,6 +10,8 @@ StartLimitBurst=5
 Type=simple
 User=yomins-agent
 Group=yomins-agent
+# Allows reading the system journal (needed for journald auth-log fallback).
+SupplementaryGroups=systemd-journal
 
 # Load token and server URL from this file.
 # Create it with: echo "YOMINS_SERVER=...\nYOMINS_TOKEN=..." > /etc/yomins-agent/env
@@ -41,6 +43,12 @@ RestartSec=10s
 
 # Give the agent time to flush on shutdown.
 TimeoutStopSec=15s
+
+# Require for access to the /dev/kmsg
+AmbientCapabilities=CAP_SYSLOG
+CapabilityBoundingSet=CAP_SYSLOG
+# Required for reading from journald
+SupplementaryGroups=systemd-journal
 
 [Install]
 WantedBy=multi-user.target

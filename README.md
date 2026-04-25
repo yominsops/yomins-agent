@@ -1,6 +1,6 @@
 # Yomins Metrics Agent
 
-A lightweight Go agent that collects host-level system metrics and pushes them to the Yomins monitoring stack. The agent requires no inbound ports and no SSH access — it pushes outbound over HTTPS.
+A lightweight Go agent that collects host-level system metrics and security events, then pushes them to the Yomins monitoring stack. The agent requires no inbound ports and no SSH access — it pushes outbound over HTTPS.
 
 ## How it works
 
@@ -10,11 +10,18 @@ A lightweight Go agent that collects host-level system metrics and pushes them t
     → collects CPU, RAM, disk,
       network, system, and server
       identity metrics
+    → collects auth, process,
+      network, and system events
     → pushes every 60s over HTTPS  →   Ingestion endpoint
       with Bearer token auth           validates token
                                        enriches with project labels
-                                       writes to Prometheus storage
+                                       writes to storage
 ```
+
+The agent runs two independent pipelines:
+
+- **Metrics pipeline** — collects numeric measurements on a configurable interval (default: 60 s) and pushes them as Prometheus text format.
+- **Event pipeline** — detects discrete security-relevant changes (logins, new processes, new listening ports, OOM kills) and buffers them as structured JSON events. The event pipeline runs continuously in background goroutines alongside the metrics loop and is independent of the push interval.
 
 The agent identifies itself with a project-scoped token. The server resolves the token to a project, appends authoritative labels (`project_id`, `customer_id`), and stores the data. **The agent never controls project identity** — that is always enforced server-side.
 
@@ -139,6 +146,121 @@ Metrics from the [yomins-backup](yomins-backup) report file (`/var/lib/yomins/ba
 
 All metrics carry agent-level labels: `agent_id`, `hostname`, `source="yomins_agent"`.
 
+## Security events collected
+
+The event pipeline is Linux-only. All collectors degrade gracefully — a missing file or restricted permission produces a single warning and the collector exits cleanly without blocking the metrics pipeline.
+
+### Event schema
+
+Every event shares a common envelope:
+
+```json
+{
+  "id": "uuid-v4",
+  "timestamp": "2026-04-24T16:10:00Z",
+  "type": "auth.login_success",
+  "category": "access_event",
+  "severity": "info",
+  "host": { "hostname": "srv-01", "ip": "10.0.0.10" },
+  "agent": { "name": "yomins-agent", "version": "1.0.0" },
+  "actor": { "user": "alice", "uid": 1000 },
+  "context": { "tty": "pts/0", "remote_ip": "192.168.1.5" },
+  "tags": ["auth", "login"]
+}
+```
+
+Domain-specific payloads (`process`, `network`) are added for relevant event types.
+
+### Severities and categories
+
+| Category | Events |
+|---|---|
+| `access_event` | All auth events |
+| `threat_activity` | `process.suspicious`, `network.scan_detected` |
+| `system_check` | Process lifecycle, listening ports, system events |
+
+| Severity | Events |
+|---|---|
+| `info` | login_success, logout, process.start/stop, network.connection_open |
+| `warning` | login_failed, sudo, process.high_cpu/memory, system.reboot/oom_killer |
+| `critical` | process.suspicious, network.scan_detected |
+
+### auth.*
+
+| Event | Trigger | Data source |
+|---|---|---|
+| `auth.login_success` | User logs in via SSH or console | `/var/log/wtmp` (binary utmp) |
+| `auth.logout` | SSH or console session ends | `/var/log/wtmp` |
+| `auth.login_failed` | Failed authentication attempt | `/var/log/auth.log`, `/var/log/secure`, or systemd journal |
+| `auth.sudo` | `sudo` command executed | `/var/log/auth.log`, `/var/log/secure`, or systemd journal |
+
+The wtmp cursor is persisted to `<state-dir>/wtmp_cursor` so events missed during agent downtime are replayed on restart.
+
+For `auth.login_failed` and `auth.sudo` the agent uses the first available source in this order:
+1. `--auth-log-path` (default: `/var/log/auth.log`) — used on Debian/Ubuntu with rsyslog/syslog-ng
+2. `/var/log/secure` — automatic fallback on RHEL/CentOS/AlmaLinux when `auth.log` is absent
+3. systemd journal via `journalctl` — automatic fallback on systems without a syslog file (modern Debian/Ubuntu without rsyslog); requires the service user to be in the `systemd-journal` group (configured automatically by the service unit)
+
+### process.*
+
+| Event | Trigger |
+|---|---|
+| `process.start` | New process appears after agent startup |
+| `process.stop` | A tracked process (one that emitted `process.start`) exits |
+| `process.high_cpu` | CPU usage spikes to >3× rolling average **and** >5% absolute |
+| `process.high_memory` | Memory usage spikes to >3× rolling average **and** >10% absolute |
+| `process.suspicious` | New process cmdline matches a suspicious pattern |
+
+Anomaly detection uses a 5-reading rolling window per process. Repeat alerts are suppressed for 60 s (configurable). Processes present at agent startup form a silent baseline — only post-startup processes generate events.
+
+Default suspicious patterns (configurable via `--suspicious-patterns`):
+- `curl ... | sh` / `wget ... | sh`
+- `nc -e ...` (netcat with exec)
+- `base64 -d ... | sh`
+- `/dev/tcp/` (bash TCP redirect)
+- `xmrig`, `minerd`, `cpuminer` (crypto miners)
+- `bash -i >& /dev/tcp/...` (reverse shell)
+
+### network.*
+
+| Event | Trigger | Data source |
+|---|---|---|
+| `network.connection_open` | New port appears in LISTEN state | `/proc/net/tcp`, `/proc/net/tcp6` |
+| `network.scan_detected` | Total connection count doubles **and** increases by ≥50 | `/proc/net/tcp`, `/proc/net/tcp6` |
+
+Ports in LISTEN state at agent startup are the baseline. Only new ports emit events.
+
+### system.*
+
+| Event | Trigger | Data source |
+|---|---|---|
+| `system.reboot` | Boot timestamp is newer than the last persisted boot time | gopsutil `BootTime()` + `<state-dir>/last_boot_time` |
+| `system.oom_killer` | Kernel OOM killer kills a process | `/dev/kmsg` (requires `CAP_SYSLOG` or root) |
+
+### Docker requirements for event collection
+
+Run the container with these flags to enable host-level event visibility:
+
+```bash
+docker run -d \
+  --name yomins-agent \
+  --pid=host \
+  --net=host \
+  -v /var/log/wtmp:/var/log/wtmp:ro \
+  -v /var/log/auth.log:/var/log/auth.log:ro \
+  -v /dev/kmsg:/dev/kmsg:ro \
+  ...
+```
+
+| Collector | Required flag/mount | Without it |
+|---|---|---|
+| Auth (login/logout) | `-v /var/log/wtmp:/var/log/wtmp:ro` | Single warning, collector disabled |
+| Auth (failed/sudo) | `-v /var/log/auth.log:/var/log/auth.log:ro` | Single warning, collector disabled |
+| Process (host PIDs) | `--pid=host` | Container-scoped PIDs only (no error) |
+| Network (host sockets) | `--net=host` | Container network namespace only (no error) |
+| OOM killer | `-v /dev/kmsg:/dev/kmsg:ro` + `CAP_SYSLOG` | Single warning, collector disabled |
+| Reboot detection | None | Works from any namespace |
+
 ## Dry-run mode
 
 Use `--dry-run` to collect metrics and print them to stdout without sending anything to the server. No `--server` or `--token` is required. This is useful for verifying what the agent collects on a given host.
@@ -172,7 +294,7 @@ dry-run mode: collecting every 60s, printing to stdout (Ctrl-C to stop)
 ---
 ```
 
-All other flags (`--disable-filesystems`, `--exclude-mountpoints`, `--hostname-override`, etc.) work normally alongside `--dry-run`.
+All other flags (`--disable-filesystems`, `--exclude-mountpoints`, `--hostname-override`, etc.) work normally alongside `--dry-run`. Event collection also runs in dry-run mode — each event is logged as a JSON line to stderr via the standard logger.
 
 ## Configuration
 
@@ -194,6 +316,15 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--auto-upgrade-interval` | `YOMINS_AUTO_UPGRADE_INTERVAL` | `24h` | How often to check for a newer version |
 | `--disable-kernelcare-info` | `YOMINS_DISABLE_KERNELCARE_INFO` | `false` | Disable KernelCare detection (skip `kernelcare_info` metric) |
 | `--virtualization-override` | `YOMINS_VIRTUALIZATION_OVERRIDE` | *(auto-detected)* | Override the detected virtualization type (e.g. `kvm`, `none`) |
+| `--disable-events` | `YOMINS_DISABLE_EVENTS` | `false` | Disable all security event collection |
+| `--disable-auth-events` | `YOMINS_DISABLE_AUTH_EVENTS` | `false` | Disable auth event collection only |
+| `--disable-process-events` | `YOMINS_DISABLE_PROCESS_EVENTS` | `false` | Disable process event collection only |
+| `--disable-network-events` | `YOMINS_DISABLE_NETWORK_EVENTS` | `false` | Disable network event collection only |
+| `--disable-system-events` | `YOMINS_DISABLE_SYSTEM_EVENTS` | `false` | Disable system event collection only |
+| `--event-buffer-size` | `YOMINS_EVENT_BUFFER_SIZE` | `10000` | Maximum number of events held in memory before older events are dropped |
+| `--wtmp-path` | `YOMINS_WTMP_PATH` | `/var/log/wtmp` | Path to the wtmp file used for login/logout event collection |
+| `--auth-log-path` | `YOMINS_AUTH_LOG_PATH` | `/var/log/auth.log` | Path to the auth log file used for failed-login and sudo events; falls back to `/var/log/secure` then to systemd journal when the file does not exist |
+| `--suspicious-patterns` | `YOMINS_SUSPICIOUS_PATTERNS` | *(built-in defaults)* | Comma-separated regex patterns for suspicious process detection; replaces the built-in list |
 | `--insecure-skip-verify` | — | `false` | Skip TLS verification (**dev only**) |
 | `--dry-run` | — | `false` | Print collected metrics to stdout instead of sending to the server; `--server` and `--token` are not required |
 

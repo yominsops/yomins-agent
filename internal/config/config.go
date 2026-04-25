@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +30,17 @@ type Config struct {
 	ExcludeInterfaces      []string
 	DisableKernelCareInfo  bool   // --disable-kernelcare-info / YOMINS_DISABLE_KERNELCARE_INFO
 	VirtualizationOverride string // --virtualization-override / YOMINS_VIRTUALIZATION_OVERRIDE
+
+	// Event collection
+	DisableEvents        bool
+	DisableAuthEvents    bool
+	DisableProcessEvents bool
+	DisableNetworkEvents bool
+	DisableSystemEvents  bool
+	EventBufferSize      int      // default: 10000
+	WtmpPath             string   // default: /var/log/wtmp
+	AuthLogPath          string   // default: /var/log/auth.log
+	SuspiciousPatterns   []string // CSV; defaults defined in process collector
 }
 
 // Load parses configuration from CLI flags and environment variables.
@@ -59,8 +71,20 @@ func Load() (*Config, error) {
 
 	var excludeMountpointsRaw string
 	var excludeInterfacesRaw string
+	var suspiciousPatternsRaw string
 	fs.StringVar(&excludeMountpointsRaw, "exclude-mountpoints", "", "Comma-separated mountpoints to exclude from disk metrics (YOMINS_EXCLUDE_MOUNTPOINTS)")
 	fs.StringVar(&excludeInterfacesRaw, "exclude-interfaces", "", "Comma-separated network interfaces to exclude (YOMINS_EXCLUDE_INTERFACES)")
+
+	// Event collection flags
+	fs.BoolVar(&cfg.DisableEvents, "disable-events", false, "Disable all event collection (YOMINS_DISABLE_EVENTS)")
+	fs.BoolVar(&cfg.DisableAuthEvents, "disable-auth-events", false, "Disable auth event collection (YOMINS_DISABLE_AUTH_EVENTS)")
+	fs.BoolVar(&cfg.DisableProcessEvents, "disable-process-events", false, "Disable process event collection (YOMINS_DISABLE_PROCESS_EVENTS)")
+	fs.BoolVar(&cfg.DisableNetworkEvents, "disable-network-events", false, "Disable network event collection (YOMINS_DISABLE_NETWORK_EVENTS)")
+	fs.BoolVar(&cfg.DisableSystemEvents, "disable-system-events", false, "Disable system event collection (YOMINS_DISABLE_SYSTEM_EVENTS)")
+	fs.IntVar(&cfg.EventBufferSize, "event-buffer-size", 10000, "Maximum number of events held in memory (YOMINS_EVENT_BUFFER_SIZE)")
+	fs.StringVar(&cfg.WtmpPath, "wtmp-path", "/var/log/wtmp", "Path to wtmp file for login/logout event collection (YOMINS_WTMP_PATH)")
+	fs.StringVar(&cfg.AuthLogPath, "auth-log-path", "/var/log/auth.log", "Path to auth log file for failed login and sudo events (YOMINS_AUTH_LOG_PATH)")
+	fs.StringVar(&suspiciousPatternsRaw, "suspicious-patterns", "", "Comma-separated regex patterns for suspicious process detection (YOMINS_SUSPICIOUS_PATTERNS)")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, fmt.Errorf("parse flags: %w", err)
@@ -87,8 +111,16 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// Apply env vars for CSV fields not set on the CLI.
+	if !explicitFlags["suspicious-patterns"] {
+		if v := os.Getenv("YOMINS_SUSPICIOUS_PATTERNS"); v != "" {
+			suspiciousPatternsRaw = v
+		}
+	}
+
 	cfg.ExcludeMountpoints = parseCSV(excludeMountpointsRaw)
 	cfg.ExcludeInterfaces = parseCSV(excludeInterfacesRaw)
+	cfg.SuspiciousPatterns = parseCSV(suspiciousPatternsRaw)
 
 	return cfg, nil
 }
@@ -157,6 +189,48 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 	if !explicit["virtualization-override"] {
 		if v := os.Getenv("YOMINS_VIRTUALIZATION_OVERRIDE"); v != "" {
 			cfg.VirtualizationOverride = v
+		}
+	}
+	if !explicit["disable-events"] {
+		if v := os.Getenv("YOMINS_DISABLE_EVENTS"); isTruthy(v) {
+			cfg.DisableEvents = true
+		}
+	}
+	if !explicit["disable-auth-events"] {
+		if v := os.Getenv("YOMINS_DISABLE_AUTH_EVENTS"); isTruthy(v) {
+			cfg.DisableAuthEvents = true
+		}
+	}
+	if !explicit["disable-process-events"] {
+		if v := os.Getenv("YOMINS_DISABLE_PROCESS_EVENTS"); isTruthy(v) {
+			cfg.DisableProcessEvents = true
+		}
+	}
+	if !explicit["disable-network-events"] {
+		if v := os.Getenv("YOMINS_DISABLE_NETWORK_EVENTS"); isTruthy(v) {
+			cfg.DisableNetworkEvents = true
+		}
+	}
+	if !explicit["disable-system-events"] {
+		if v := os.Getenv("YOMINS_DISABLE_SYSTEM_EVENTS"); isTruthy(v) {
+			cfg.DisableSystemEvents = true
+		}
+	}
+	if !explicit["event-buffer-size"] {
+		if v := os.Getenv("YOMINS_EVENT_BUFFER_SIZE"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				cfg.EventBufferSize = n
+			}
+		}
+	}
+	if !explicit["wtmp-path"] {
+		if v := os.Getenv("YOMINS_WTMP_PATH"); v != "" {
+			cfg.WtmpPath = v
+		}
+	}
+	if !explicit["auth-log-path"] {
+		if v := os.Getenv("YOMINS_AUTH_LOG_PATH"); v != "" {
+			cfg.AuthLogPath = v
 		}
 	}
 }
