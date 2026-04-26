@@ -62,8 +62,16 @@ type parsedRecord struct {
 	Timestamp time.Time
 }
 
+// minValidSec is the earliest Unix timestamp (2020-01-01 00:00:00 UTC) we
+// consider plausible in a wtmp record.  Records written before NTP sync (when
+// the system clock sits near the Unix epoch) have tv_sec values orders of
+// magnitude smaller than this and would produce misleading 1970 timestamps.
+const minValidSec = 1577836800 // 2020-01-01 00:00:00 UTC
+
 // parseRecord decodes a single 384-byte utmp record.
-// Returns false if the byte slice is not exactly utmpRecordSize bytes.
+// Returns false if the byte slice is not exactly utmpRecordSize bytes or if
+// the embedded timestamp pre-dates minValidSec (indicating a pre-NTP-sync
+// record written while the system clock was near the Unix epoch).
 func parseRecord(data []byte) (parsedRecord, bool) {
 	if len(data) != utmpRecordSize {
 		return parsedRecord{}, false
@@ -73,6 +81,9 @@ func parseRecord(data []byte) (parsedRecord, bool) {
 		return parsedRecord{}, false
 	}
 	sec := int64(raw.TvSec)
+	if sec < minValidSec {
+		return parsedRecord{}, false
+	}
 	usec := int64(raw.TvUsec)
 	return parsedRecord{
 		Type:      raw.Type,
