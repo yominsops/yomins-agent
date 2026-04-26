@@ -81,17 +81,19 @@ func parseRecord(data []byte) (parsedRecord, bool) {
 		return parsedRecord{}, false
 	}
 	sec := int64(raw.TvSec)
-	if sec < minValidSec {
-		return parsedRecord{}, false
+	var ts time.Time
+	if sec >= minValidSec {
+		ts = time.Unix(sec, int64(raw.TvUsec)*1000).UTC()
+	} else {
+		ts = time.Now().UTC()
 	}
-	usec := int64(raw.TvUsec)
 	return parsedRecord{
 		Type:      raw.Type,
 		PID:       raw.PID,
 		TTY:       nullTerminated(raw.Line[:]),
 		User:      nullTerminated(raw.User[:]),
 		Host:      nullTerminated(raw.Host[:]),
-		Timestamp: time.Unix(sec, usec*1000).UTC(),
+		Timestamp: ts,
 	}, true
 }
 

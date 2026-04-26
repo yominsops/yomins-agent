@@ -91,6 +91,21 @@ func TestParseRecord_Timestamp(t *testing.T) {
 	}
 }
 
+func TestParseRecord_TimestampFallback(t *testing.T) {
+	// Records with tv_sec=0 (pre-NTP-sync) should still be parsed; timestamp
+	// falls back to time.Now() so the event is not silently dropped.
+	before := time.Now().UTC()
+	raw := buildRecord(utUserProcess, 1, "tty1", "root", "", 0, 0)
+	rec, ok := parseRecord(raw)
+	after := time.Now().UTC()
+	if !ok {
+		t.Fatal("parseRecord returned ok=false for pre-NTP record")
+	}
+	if rec.Timestamp.Before(before) || rec.Timestamp.After(after) {
+		t.Errorf("Timestamp %v not within [%v, %v]", rec.Timestamp, before, after)
+	}
+}
+
 func TestParseRecord_WrongSize(t *testing.T) {
 	_, ok := parseRecord(make([]byte, 100))
 	if ok {
@@ -109,7 +124,7 @@ func TestParseRecord_WrongSize(t *testing.T) {
 }
 
 func TestParseRecord_ExactSize(t *testing.T) {
-	raw := buildRecord(utUserProcess, 99, "tty1", "test", "host", 0, 0)
+	raw := buildRecord(utUserProcess, 99, "tty1", "test", "host", minValidSec, 0)
 	if len(raw) != utmpRecordSize {
 		t.Fatalf("buildRecord length = %d, want %d", len(raw), utmpRecordSize)
 	}
@@ -121,7 +136,7 @@ func TestParseRecord_ExactSize(t *testing.T) {
 
 func TestParseRecord_OtherType(t *testing.T) {
 	// Type 1 (RUN_LVL) should be parseable but callers filter it out.
-	raw := buildRecord(1, 0, "", "", "", 0, 0)
+	raw := buildRecord(1, 0, "", "", "", minValidSec, 0)
 	rec, ok := parseRecord(raw)
 	if !ok {
 		t.Fatal("parseRecord returned ok=false for type=1")
@@ -176,7 +191,7 @@ func TestNullTerminated_Empty(t *testing.T) {
 
 func TestParseRecord_ShortUserField(t *testing.T) {
 	// User field shorter than 32 bytes, rest zero-padded.
-	raw := buildRecord(utUserProcess, 1, "pts/0", "jo", "", 0, 0)
+	raw := buildRecord(utUserProcess, 1, "pts/0", "jo", "", minValidSec, 0)
 	rec, ok := parseRecord(raw)
 	if !ok {
 		t.Fatal("parseRecord returned ok=false")
@@ -187,7 +202,7 @@ func TestParseRecord_ShortUserField(t *testing.T) {
 }
 
 func TestParseRecord_EmptyHost(t *testing.T) {
-	raw := buildRecord(utUserProcess, 1, "tty1", "root", "", 0, 0)
+	raw := buildRecord(utUserProcess, 1, "tty1", "root", "", minValidSec, 0)
 	rec, ok := parseRecord(raw)
 	if !ok {
 		t.Fatal("parseRecord returned ok=false")
@@ -209,6 +224,7 @@ func TestParseRecord_PIDLittleEndian(t *testing.T) {
 	// Write a known PID and verify binary.Read decodes it correctly.
 	raw := make([]byte, utmpRecordSize)
 	binary.LittleEndian.PutUint32(raw[4:], 0xDEADBEEF)
+	binary.LittleEndian.PutUint32(raw[340:], uint32(minValidSec))
 	rec, ok := parseRecord(raw)
 	if !ok {
 		t.Fatal("parseRecord returned ok=false")
@@ -219,7 +235,7 @@ func TestParseRecord_PIDLittleEndian(t *testing.T) {
 }
 
 func TestBuildRecord_AllFieldsRoundTrip(t *testing.T) {
-	raw := buildRecord(utUserProcess, 42, "pts/2", "charlie", "10.0.0.5", 1234567890, 999)
+	raw := buildRecord(utUserProcess, 42, "pts/2", "charlie", "10.0.0.5", minValidSec+1000, 999)
 	rec, ok := parseRecord(raw)
 	if !ok {
 		t.Fatal("parseRecord returned ok=false")
