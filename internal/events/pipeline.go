@@ -21,7 +21,7 @@ type PipelineConfig struct {
 
 // Pipeline wires EventCollectors to a shared RingBuffer.
 // It starts one goroutine per collector plus one fan-in goroutine.
-// Phase 1: every event is also logged as JSON via slog.Info.
+// Phase 1: every event is also logged as JSON via slog.Debug.
 type Pipeline struct {
 	collectors []EventCollector
 	buf        *RingBuffer
@@ -76,7 +76,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	for ev := range p.fanIn {
 		p.buf.Push(ev)
 		if data, err := json.Marshal(ev); err == nil {
-			slog.Info("event", "type", string(ev.Type), "severity", string(ev.Severity), "payload", string(data))
+			slog.Debug("event", "type", string(ev.Type), "severity", string(ev.Severity), "payload", string(data))
 		}
 	}
 
