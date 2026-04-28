@@ -58,7 +58,7 @@ The agent identifies itself with a project-scoped token. The server resolves the
 | `disk_inodes_free` | Gauge | Free inodes |
 | `disk_inodes_used_percent` | Gauge | Inode usage, 0–100 |
 
-### Network (per interface, label: `interface`; loopback excluded)
+### Network (per interface, label: `interface`; only physical-style interfaces included by default)
 | Metric | Type | Description |
 |--------|------|-------------|
 | `network_bytes_sent_total` | Counter | Bytes sent since boot |
@@ -332,7 +332,8 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--disable-filesystems` | `YOMINS_DISABLE_FILESYSTEMS` | `false` | Disable disk metrics entirely |
 | `--disable-network` | `YOMINS_DISABLE_NETWORK` | `false` | Disable network metrics entirely |
 | `--exclude-mountpoints` | `YOMINS_EXCLUDE_MOUNTPOINTS` | *(none)* | Comma-separated mountpoints to skip (e.g. `/proc,/sys,/dev/shm`) |
-| `--exclude-interfaces` | `YOMINS_EXCLUDE_INTERFACES` | *(none)* | Comma-separated interfaces to skip (e.g. `docker0,virbr0`); loopback is always excluded |
+| `--include-interfaces` | `YOMINS_INCLUDE_INTERFACES` | `eth*,ens*,enp*,eno*,wlan*,wlp*` | Comma-separated glob patterns of interfaces to report. When non-empty, only matching interfaces are included. Set to empty to switch to exclude mode. |
+| `--exclude-interfaces` | `YOMINS_EXCLUDE_INTERFACES` | *(built-in: `lo,docker*,veth*,br-*,tun*,wg*`)* | Comma-separated glob patterns of interfaces to skip. Used only when `--include-interfaces` is empty; when in exclude mode, DOWN interfaces are also filtered automatically. |
 | `--state-dir` | `YOMINS_STATE_DIR` | `/var/lib/yomins/agent` | Persistent state directory |
 | `--disable-auto-upgrade` | `YOMINS_DISABLE_AUTO_UPGRADE` | `false` | Disable automatic self-upgrade |
 | `--auto-upgrade-interval` | `YOMINS_AUTO_UPGRADE_INTERVAL` | `24h` | How often to check for a newer version |

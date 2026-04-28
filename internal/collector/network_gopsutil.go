@@ -29,3 +29,20 @@ func (realNetworkReader) IOCountersWithContext(ctx context.Context, pernic bool)
 	}
 	return result, nil
 }
+
+func (realNetworkReader) UpInterfaceNames(ctx context.Context) (map[string]bool, error) {
+	ifaces, err := net.InterfacesWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]bool, len(ifaces))
+	for _, iface := range ifaces {
+		for _, flag := range iface.Flags {
+			if flag == "up" {
+				m[iface.Name] = true
+				break
+			}
+		}
+	}
+	return m, nil
+}

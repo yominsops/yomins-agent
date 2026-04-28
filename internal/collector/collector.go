@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"path"
 
 	"github.com/yominsops/yomins-agent/internal/metrics"
 )
@@ -20,6 +21,18 @@ type Collector interface {
 func isExcluded(name string, excludes []string) bool {
 	for _, ex := range excludes {
 		if ex == name {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAnyGlob reports whether name matches at least one shell glob pattern.
+// Uses path.Match semantics: * matches any sequence of non-separator characters.
+// Invalid patterns are silently skipped (never match).
+func matchesAnyGlob(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if ok, _ := path.Match(p, name); ok {
 			return true
 		}
 	}

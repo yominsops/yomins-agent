@@ -146,13 +146,8 @@ func buildCollectors(cfg *config.Config) []collector.Collector {
 		}
 	}
 	if !cfg.DisableNetwork {
-		if len(cfg.ExcludeInterfaces) > 0 {
-			// Always prepend "lo" so loopback remains excluded regardless of the user list.
-			excludes := append([]string{"lo"}, cfg.ExcludeInterfaces...)
-			collectors = append(collectors, collector.NewNetworkCollectorWithFilters(excludes))
-		} else {
-			collectors = append(collectors, collector.NewNetworkCollector())
-		}
+		collectors = append(collectors,
+			collector.NewNetworkCollectorWithFilters(cfg.IncludeInterfaces, cfg.ExcludeInterfaces))
 	}
 	return collectors
 }

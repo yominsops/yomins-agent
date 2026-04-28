@@ -28,6 +28,7 @@ type Config struct {
 	AutoUpgradeInterval    time.Duration
 	ExcludeMountpoints     []string
 	ExcludeInterfaces      []string
+	IncludeInterfaces      []string // --include-interfaces / YOMINS_INCLUDE_INTERFACES
 	DisableKernelCareInfo  bool   // --disable-kernelcare-info / YOMINS_DISABLE_KERNELCARE_INFO
 	VirtualizationOverride string // --virtualization-override / YOMINS_VIRTUALIZATION_OVERRIDE
 
@@ -84,9 +85,15 @@ func Load() (*Config, error) {
 
 	var excludeMountpointsRaw string
 	var excludeInterfacesRaw string
+	var includeInterfacesRaw string
 	var suspiciousPatternsRaw string
 	fs.StringVar(&excludeMountpointsRaw, "exclude-mountpoints", "", "Comma-separated mountpoints to exclude from disk metrics (YOMINS_EXCLUDE_MOUNTPOINTS)")
-	fs.StringVar(&excludeInterfacesRaw, "exclude-interfaces", "", "Comma-separated network interfaces to exclude (YOMINS_EXCLUDE_INTERFACES)")
+	fs.StringVar(&excludeInterfacesRaw, "exclude-interfaces", "",
+		"Comma-separated glob patterns of interfaces to exclude (YOMINS_EXCLUDE_INTERFACES); "+
+			"used when --include-interfaces is empty. Built-in defaults: lo,docker*,veth*,br-*,tun*,wg*")
+	fs.StringVar(&includeInterfacesRaw, "include-interfaces", "eth*,ens*,enp*,eno*,wlan*,wlp*",
+		"Comma-separated glob patterns of interfaces to include (YOMINS_INCLUDE_INTERFACES); "+
+			"only matching interfaces are reported. Set to empty to switch to exclude mode.")
 
 	// Event collection flags
 	fs.BoolVar(&cfg.DisableEvents, "disable-events", false, "Disable all event collection (YOMINS_DISABLE_EVENTS)")
@@ -136,6 +143,11 @@ func Load() (*Config, error) {
 			excludeInterfacesRaw = v
 		}
 	}
+	if !explicitFlags["include-interfaces"] {
+		if v, ok := os.LookupEnv("YOMINS_INCLUDE_INTERFACES"); ok {
+			includeInterfacesRaw = v
+		}
+	}
 
 	// Apply env vars for CSV fields not set on the CLI.
 	if !explicitFlags["suspicious-patterns"] {
@@ -146,6 +158,7 @@ func Load() (*Config, error) {
 
 	cfg.ExcludeMountpoints = parseCSV(excludeMountpointsRaw)
 	cfg.ExcludeInterfaces = parseCSV(excludeInterfacesRaw)
+	cfg.IncludeInterfaces = parseCSV(includeInterfacesRaw)
 	cfg.SuspiciousPatterns = parseCSV(suspiciousPatternsRaw)
 
 	return cfg, nil
