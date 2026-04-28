@@ -17,7 +17,7 @@ import (
 var DefaultSuspiciousPatterns = []string{
 	`curl.*\|\s*(ba)?sh`,
 	`wget.*\|\s*(ba)?sh`,
-	`nc\s+-[^-]*e`,
+	`\bnc\s+-[^-]*e`,
 	`base64.*-d.*\|.*sh`,
 	`/dev/tcp/`,
 	`xmrig|minerd|cpuminer`,
@@ -33,6 +33,7 @@ type Config struct {
 	MemAlertThreshold  float32       // absolute memory % floor; default: 10.0
 	MemAlertMultiplier float32       // alert when current > multiplier × avg; default: 3.0
 	AlertCooldown      time.Duration // suppress repeat alerts per process; default: 60s
+	MonitorLifecycle   bool          // emit process.start and process.stop events; default: false
 	Host               events.HostInfo
 	Agent              events.AgentInfo
 }
@@ -178,7 +179,9 @@ func (c *Collector) poll(ctx context.Context) []events.Event {
 		}
 		c.procs[p.Pid] = snap
 
-		evs = append(evs, c.makeStartEvent(snap, now))
+		if c.cfg.MonitorLifecycle {
+			evs = append(evs, c.makeStartEvent(snap, now))
+		}
 
 		// Check for suspicious command lines.
 		if c.isSuspicious(snap.Cmdline) {
@@ -189,7 +192,7 @@ func (c *Collector) poll(ctx context.Context) []events.Event {
 	// Detect exited and anomalous processes.
 	for pid, snap := range c.procs {
 		if _, alive := currentPIDs[pid]; !alive {
-			if snap.isNew {
+			if snap.isNew && c.cfg.MonitorLifecycle {
 				evs = append(evs, c.makeStopEvent(snap, now))
 			}
 			delete(c.procs, pid)

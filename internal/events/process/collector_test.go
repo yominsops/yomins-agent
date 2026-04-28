@@ -13,8 +13,9 @@ import (
 
 func testConfig() Config {
 	return Config{
-		Host:  events.HostInfo{Hostname: "test-host", IP: "10.0.0.1"},
-		Agent: events.AgentInfo{Name: "test-agent", Version: "0.0.0"},
+		Host:             events.HostInfo{Hostname: "test-host", IP: "10.0.0.1"},
+		Agent:            events.AgentInfo{Name: "test-agent", Version: "0.0.0"},
+		MonitorLifecycle: true,
 	}
 }
 

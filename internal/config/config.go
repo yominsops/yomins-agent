@@ -32,15 +32,16 @@ type Config struct {
 	VirtualizationOverride string // --virtualization-override / YOMINS_VIRTUALIZATION_OVERRIDE
 
 	// Event collection
-	DisableEvents        bool
-	DisableAuthEvents    bool
-	DisableProcessEvents bool
-	DisableNetworkEvents bool
-	DisableSystemEvents  bool
-	EventBufferSize      int      // default: 10000
-	WtmpPath             string   // default: /var/log/wtmp
-	AuthLogPath          string   // default: /var/log/auth.log
-	SuspiciousPatterns   []string // CSV; defaults defined in process collector
+	DisableEvents            bool
+	DisableAuthEvents        bool
+	DisableProcessEvents     bool
+	DisableNetworkEvents     bool
+	DisableSystemEvents      bool
+	MonitorProcessLifecycle  bool     // --monitor-process-lifecycle / YOMINS_MONITOR_PROCESS_LIFECYCLE
+	EventBufferSize          int      // default: 10000
+	WtmpPath                 string   // default: /var/log/wtmp
+	AuthLogPath              string   // default: /var/log/auth.log
+	SuspiciousPatterns       []string // CSV; defaults defined in process collector
 
 	// Event transport
 	EventFlushInterval time.Duration // default: 10s
@@ -85,6 +86,7 @@ func Load() (*Config, error) {
 	fs.BoolVar(&cfg.DisableProcessEvents, "disable-process-events", false, "Disable process event collection (YOMINS_DISABLE_PROCESS_EVENTS)")
 	fs.BoolVar(&cfg.DisableNetworkEvents, "disable-network-events", false, "Disable network event collection (YOMINS_DISABLE_NETWORK_EVENTS)")
 	fs.BoolVar(&cfg.DisableSystemEvents, "disable-system-events", false, "Disable system event collection (YOMINS_DISABLE_SYSTEM_EVENTS)")
+	fs.BoolVar(&cfg.MonitorProcessLifecycle, "monitor-process-lifecycle", false, "Enable process.start and process.stop event monitoring (YOMINS_MONITOR_PROCESS_LIFECYCLE)")
 	fs.IntVar(&cfg.EventBufferSize, "event-buffer-size", 10000, "Maximum number of events held in memory (YOMINS_EVENT_BUFFER_SIZE)")
 	fs.StringVar(&cfg.WtmpPath, "wtmp-path", "/var/log/wtmp", "Path to wtmp file for login/logout event collection (YOMINS_WTMP_PATH)")
 	fs.StringVar(&cfg.AuthLogPath, "auth-log-path", "/var/log/auth.log", "Path to auth log file for failed login and sudo events (YOMINS_AUTH_LOG_PATH)")
@@ -222,6 +224,11 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 	if !explicit["disable-system-events"] {
 		if v := os.Getenv("YOMINS_DISABLE_SYSTEM_EVENTS"); isTruthy(v) {
 			cfg.DisableSystemEvents = true
+		}
+	}
+	if !explicit["monitor-process-lifecycle"] {
+		if v := os.Getenv("YOMINS_MONITOR_PROCESS_LIFECYCLE"); isTruthy(v) {
+			cfg.MonitorProcessLifecycle = true
 		}
 	}
 	if !explicit["event-buffer-size"] {

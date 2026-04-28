@@ -47,6 +47,7 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 		collectors = append(collectors, evtprocess.NewCollector(evtprocess.Config{
 			PollInterval:       2 * time.Second,
 			SuspiciousPatterns: cfg.SuspiciousPatterns,
+			MonitorLifecycle:   cfg.MonitorProcessLifecycle,
 			Host:               host,
 			Agent:              agent,
 		}))
