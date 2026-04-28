@@ -58,10 +58,11 @@ func TestPoll_NewListener_EmitsEvent(t *testing.T) {
 	c.scanner = makeFakeScanner([]listenEntry{port80}, 1, nil)
 	evs := c.poll()
 
-	if len(evs) != 1 {
-		t.Fatalf("events count = %d, want 1", len(evs))
+	// Each new listener produces two events: connection_open + suspicious_port.
+	if len(evs) != 2 {
+		t.Fatalf("events count = %d, want 2", len(evs))
 	}
-	ev := evs[0]
+	ev := evs[0] // connection_open is always emitted first
 	if ev.Type != events.EventNetworkConnectionOpen {
 		t.Errorf("Type = %q, want %q", ev.Type, events.EventNetworkConnectionOpen)
 	}
