@@ -14,6 +14,8 @@ import (
 )
 
 // DefaultSuspiciousPatterns is the built-in list of suspicious command-line patterns.
+// Includes reverse-shell patterns so that isSuspicious() covers all dangerous cmdlines;
+// poll() emits the more specific process.reverse_shell type for the reverse-shell subset.
 var DefaultSuspiciousPatterns = []string{
 	`curl.*\|\s*(ba)?sh`,
 	`wget.*\|\s*(ba)?sh`,
@@ -23,6 +25,17 @@ var DefaultSuspiciousPatterns = []string{
 	`xmrig|minerd|cpuminer`,
 	`bash\s+-i\s+>&\s+/dev/tcp`,
 }
+
+// DefaultReverseShellPatterns is the subset of suspicious patterns that indicate
+// an active reverse shell. These emit process.reverse_shell instead of process.suspicious.
+var DefaultReverseShellPatterns = []string{
+	`\bnc\s+-[^-]*e`,
+	`/dev/tcp/`,
+	`bash\s+-i\s+>&\s+/dev/tcp`,
+}
+
+// defaultTmpPaths are the directories considered suspicious for binary execution.
+var defaultTmpPaths = []string{"/tmp/", "/var/tmp/", "/dev/shm/"}
 
 // Config holds configuration for the ProcessCollector.
 type Config struct {
@@ -34,6 +47,7 @@ type Config struct {
 	MemAlertMultiplier float32       // alert when current > multiplier × avg; default: 3.0
 	AlertCooldown      time.Duration // suppress repeat alerts per process; default: 60s
 	MonitorLifecycle   bool          // emit process.start and process.stop events; default: false
+	MonitorTmpPaths    bool          // emit process.exec_tmp events; default: true when enabled via config
 	Host               events.HostInfo
 	Agent              events.AgentInfo
 }
@@ -45,9 +59,10 @@ type processLister func(ctx context.Context) ([]*gopsprocess.Process, error)
 // Collector watches for new/exited processes and detects resource anomalies
 // and suspicious command lines.
 type Collector struct {
-	cfg      Config
-	patterns []*regexp.Regexp
-	lister   processLister
+	cfg             Config
+	patterns        []*regexp.Regexp // suspicious patterns (process.suspicious)
+	reverseShells   []*regexp.Regexp // reverse-shell patterns (process.reverse_shell)
+	lister          processLister
 
 	mu    sync.Mutex
 	procs map[int32]*ProcessSnapshot // PID → snapshot
@@ -93,11 +108,19 @@ func newCollectorWithLister(cfg Config, lister processLister) *Collector {
 		}
 	}
 
+	var reverseShells []*regexp.Regexp
+	for _, p := range DefaultReverseShellPatterns {
+		if re, err := regexp.Compile(p); err == nil {
+			reverseShells = append(reverseShells, re)
+		}
+	}
+
 	return &Collector{
-		cfg:      cfg,
-		patterns: compiled,
-		lister:   lister,
-		procs:    make(map[int32]*ProcessSnapshot),
+		cfg:           cfg,
+		patterns:      compiled,
+		reverseShells: reverseShells,
+		lister:        lister,
+		procs:         make(map[int32]*ProcessSnapshot),
 	}
 }
 
@@ -183,8 +206,15 @@ func (c *Collector) poll(ctx context.Context) []events.Event {
 			evs = append(evs, c.makeStartEvent(snap, now))
 		}
 
-		// Check for suspicious command lines.
-		if c.isSuspicious(snap.Cmdline) {
+		// Check for execution from temporary directories.
+		if c.cfg.MonitorTmpPaths && isExecFromTmp(snap.Exe, snap.Cmdline) {
+			evs = append(evs, c.makeExecTmpEvent(snap, now))
+		}
+
+		// Check for reverse shell patterns first (more specific), then other suspicious patterns.
+		if c.isReverseShell(snap.Cmdline) {
+			evs = append(evs, c.makeReverseShellEvent(snap, now))
+		} else if c.isSuspicious(snap.Cmdline) {
 			evs = append(evs, c.makeSuspiciousEvent(snap, now))
 		}
 	}
@@ -264,6 +294,33 @@ func (c *Collector) isSuspicious(cmdline string) bool {
 	for _, re := range c.patterns {
 		if re.MatchString(cmdline) {
 			return true
+		}
+	}
+	return false
+}
+
+func (c *Collector) isReverseShell(cmdline string) bool {
+	for _, re := range c.reverseShells {
+		if re.MatchString(cmdline) {
+			return true
+		}
+	}
+	return false
+}
+
+// isExecFromTmp returns true if the process binary or any cmdline token lives
+// under a temporary/world-writable directory.
+func isExecFromTmp(exe, cmdline string) bool {
+	for _, prefix := range defaultTmpPaths {
+		if strings.HasPrefix(exe, prefix) {
+			return true
+		}
+	}
+	for _, token := range strings.Fields(cmdline) {
+		for _, prefix := range defaultTmpPaths {
+			if strings.HasPrefix(token, prefix) {
+				return true
+			}
 		}
 	}
 	return false
@@ -372,5 +429,47 @@ func (c *Collector) makeMemEvent(s *ProcessSnapshot, current, avg float32, now t
 			Reason: "memory_spike",
 		},
 		Tags: []string{"process", "high_memory"},
+	}
+}
+
+func (c *Collector) makeExecTmpEvent(s *ProcessSnapshot, now time.Time) events.Event {
+	return events.Event{
+		ID:         uuid.New().String(),
+		Timestamp:  now,
+		Type:       events.EventProcessExecTmp,
+		Category:   events.CategoryThreatActivity,
+		Severity:   events.SeverityWarning,
+		Confidence: events.ConfidenceMedium,
+		Host:       c.cfg.Host,
+		Agent:      c.cfg.Agent,
+		Process: &events.ProcessDetail{
+			Name:    s.Name,
+			PID:     s.PID,
+			PPID:    s.PPID,
+			Cmdline: s.Cmdline,
+			Exe:     s.Exe,
+		},
+		Tags: []string{"process", "exec_tmp"},
+	}
+}
+
+func (c *Collector) makeReverseShellEvent(s *ProcessSnapshot, now time.Time) events.Event {
+	return events.Event{
+		ID:         uuid.New().String(),
+		Timestamp:  now,
+		Type:       events.EventProcessReverseShell,
+		Category:   events.CategoryThreatActivity,
+		Severity:   events.SeverityCritical,
+		Confidence: events.ConfidenceHigh,
+		Host:       c.cfg.Host,
+		Agent:      c.cfg.Agent,
+		Process: &events.ProcessDetail{
+			Name:    s.Name,
+			PID:     s.PID,
+			PPID:    s.PPID,
+			Cmdline: s.Cmdline,
+			Exe:     s.Exe,
+		},
+		Tags: []string{"process", "reverse_shell"},
 	}
 }

@@ -161,6 +161,7 @@ Every event shares a common envelope:
   "type": "auth.login_success",
   "category": "access_event",
   "severity": "info",
+  "confidence": "high",
   "host": { "hostname": "srv-01", "ip": "10.0.0.10" },
   "agent": { "name": "yomins-agent", "version": "1.0.0" },
   "actor": { "user": "alice", "uid": 1000 },
@@ -169,21 +170,23 @@ Every event shares a common envelope:
 }
 ```
 
+`confidence` is present only on threat-activity events (`high`, `medium`, or `low`). It is omitted on audit/info events.
+
 Domain-specific payloads (`process`, `network`) are added for relevant event types.
 
 ### Severities and categories
 
 | Category | Events |
 |---|---|
-| `access_event` | All auth events |
-| `threat_activity` | `process.suspicious`, `network.scan_detected` |
+| `access_event` | All auth events (`login_success`, `login_failed`, `logout`, `sudo`) |
+| `threat_activity` | `auth.bruteforce_detected`, `auth.login_new_ip`, `process.suspicious`, `process.exec_tmp`, `process.reverse_shell`, `network.scan_detected`, `network.suspicious_port`, `system.user_created`, `system.user_deleted`, `system.config_modified` |
 | `system_check` | Process lifecycle, listening ports, system events |
 
 | Severity | Events |
 |---|---|
 | `info` | login_success, logout, process.start/stop, network.connection_open |
-| `warning` | login_failed, sudo, process.high_cpu/memory, system.reboot/oom_killer |
-| `critical` | process.suspicious, network.scan_detected |
+| `warning` | login_failed, sudo, process.high_cpu/memory, process.exec_tmp, auth.login_new_ip, network.suspicious_port, system.reboot/oom_killer, system.user_deleted |
+| `critical` | auth.bruteforce_detected, process.suspicious, process.reverse_shell, network.scan_detected, system.user_created, system.config_modified |
 
 ### auth.*
 
@@ -193,6 +196,8 @@ Domain-specific payloads (`process`, `network`) are added for relevant event typ
 | `auth.logout` | SSH or console session ends | `/var/log/wtmp` |
 | `auth.login_failed` | Failed authentication attempt | `/var/log/auth.log`, `/var/log/secure`, or systemd journal |
 | `auth.sudo` | `sudo` command executed | `/var/log/auth.log`, `/var/log/secure`, or systemd journal |
+| `auth.bruteforce_detected` | ≥ `--bruteforce-threshold` failed logins from the same IP+user within `--bruteforce-window` | derived from `auth.login_failed` |
+| `auth.login_new_ip` | Successful login from an IP not seen before for that user | derived from `auth.login_success`; state persisted in `<state-dir>/auth_last_ip.json` |
 
 The wtmp cursor is persisted to `<state-dir>/wtmp_cursor` so events missed during agent downtime are replayed on restart.
 
@@ -211,7 +216,9 @@ For `auth.login_failed` and `auth.sudo` the agent uses the first available sourc
 | `process.stop` | A tracked process (one that emitted `process.start`) exits |
 | `process.high_cpu` | CPU usage spikes to >3× rolling average **and** >5% absolute |
 | `process.high_memory` | Memory usage spikes to >3× rolling average **and** >10% absolute |
-| `process.suspicious` | New process cmdline matches a suspicious pattern |
+| `process.suspicious` | New process cmdline matches a suspicious pattern (curl/wget pipe to shell, base64 decode pipe, crypto miners) |
+| `process.exec_tmp` | New process binary or cmdline token originates from `/tmp`, `/var/tmp`, or `/dev/shm` |
+| `process.reverse_shell` | New process cmdline matches a reverse-shell pattern (`nc -e`, `/dev/tcp/`, `bash -i >&`) |
 
 Anomaly detection uses a 5-reading rolling window per process. Repeat alerts are suppressed for 60 s (configurable). Processes present at agent startup form a silent baseline — only post-startup processes generate events.
 
@@ -228,6 +235,7 @@ Default suspicious patterns (configurable via `--suspicious-patterns`):
 | Event | Trigger | Data source |
 |---|---|---|
 | `network.connection_open` | New port appears in LISTEN state | `/proc/net/tcp`, `/proc/net/tcp6` |
+| `network.suspicious_port` | Same trigger as `connection_open`; emitted as a `threat_activity/warning` signal alongside the audit event | `/proc/net/tcp`, `/proc/net/tcp6` |
 | `network.scan_detected` | Total connection count doubles **and** increases by ≥50 | `/proc/net/tcp`, `/proc/net/tcp6` |
 
 Ports in LISTEN state at agent startup are the baseline. Only new ports emit events.
@@ -238,6 +246,9 @@ Ports in LISTEN state at agent startup are the baseline. Only new ports emit eve
 |---|---|---|
 | `system.reboot` | Boot timestamp is newer than the last persisted boot time | gopsutil `BootTime()` + `<state-dir>/last_boot_time` |
 | `system.oom_killer` | Kernel OOM killer kills a process | `/dev/kmsg` (requires `CAP_SYSLOG` or root) |
+| `system.user_created` | A username not present in the snapshot appears in `/etc/passwd` | `/etc/passwd` polled every 30 s; state in `<state-dir>/passwd_snapshot.json` |
+| `system.user_deleted` | A username present in the snapshot disappears from `/etc/passwd` | `/etc/passwd` polled every 30 s |
+| `system.config_modified` | SHA-256 hash of a monitored file changes | `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/sudoers`, `/etc/ssh/sshd_config` polled every 30 s; state in `<state-dir>/file_state.json` |
 
 ### Docker requirements for event collection
 
@@ -327,6 +338,12 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--wtmp-path` | `YOMINS_WTMP_PATH` | `/var/log/wtmp` | Path to the wtmp file used for login/logout event collection |
 | `--auth-log-path` | `YOMINS_AUTH_LOG_PATH` | `/var/log/auth.log` | Path to the auth log file used for failed-login and sudo events; falls back to `/var/log/secure` then to systemd journal when the file does not exist |
 | `--suspicious-patterns` | `YOMINS_SUSPICIOUS_PATTERNS` | *(built-in defaults)* | Comma-separated regex patterns for suspicious process detection; replaces the built-in list |
+| `--bruteforce-threshold` | `YOMINS_BRUTEFORCE_THRESHOLD` | `5` | Number of failed logins from the same IP+user within the window to trigger `auth.bruteforce_detected` |
+| `--bruteforce-window` | `YOMINS_BRUTEFORCE_WINDOW` | `30s` | Sliding time window for counting brute-force attempts |
+| `--bruteforce-suppression` | `YOMINS_BRUTEFORCE_SUPPRESSION` | `2m` | Cooldown after a bruteforce event fires before another can be emitted for the same IP+user |
+| `--monitor-tmp-paths` | `YOMINS_MONITOR_TMP_PATHS` | `true` | Emit `process.exec_tmp` events for processes launched from `/tmp`, `/var/tmp`, or `/dev/shm` |
+| `--monitor-config-files` | `YOMINS_MONITOR_CONFIG_FILES` | `true` | Emit `system.config_modified` when critical config files change |
+| `--ignore-private-ip` | `YOMINS_IGNORE_PRIVATE_IP` | `true` | Ignore loopback and RFC-1918 addresses when tracking `auth.login_new_ip` |
 | `--event-flush-interval` | `YOMINS_EVENT_FLUSH_INTERVAL` | `10s` | How often to flush buffered events to the server |
 | `--event-batch-size` | `YOMINS_EVENT_BATCH_SIZE` | `200` | Maximum number of events per HTTP request |
 | `--insecure-skip-verify` | — | `false` | Skip TLS verification (**dev only**) |

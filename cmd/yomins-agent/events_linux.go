@@ -35,11 +35,15 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 
 	if !cfg.DisableAuthEvents {
 		collectors = append(collectors, auth.NewCollector(auth.Config{
-			WtmpPath:    cfg.WtmpPath,
-			AuthLogPath: cfg.AuthLogPath,
-			StateDir:    cfg.StateDir,
-			Host:        host,
-			Agent:       agent,
+			WtmpPath:              cfg.WtmpPath,
+			AuthLogPath:           cfg.AuthLogPath,
+			StateDir:              cfg.StateDir,
+			BruteforceThreshold:   cfg.BruteforceThreshold,
+			BruteforceWindow:      cfg.BruteforceWindow,
+			BruteforceSuppression: cfg.BruteforceSuppression,
+			IgnorePrivateIP:       cfg.IgnorePrivateIP,
+			Host:                  host,
+			Agent:                 agent,
 		}))
 	}
 
@@ -48,6 +52,7 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 			PollInterval:       2 * time.Second,
 			SuspiciousPatterns: cfg.SuspiciousPatterns,
 			MonitorLifecycle:   cfg.MonitorProcessLifecycle,
+			MonitorTmpPaths:    cfg.MonitorTmpPaths,
 			Host:               host,
 			Agent:              agent,
 		}))
@@ -62,9 +67,10 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 
 	if !cfg.DisableSystemEvents {
 		collectors = append(collectors, system.NewCollector(system.Config{
-			StateDir: cfg.StateDir,
-			Host:     host,
-			Agent:    agent,
+			StateDir:           cfg.StateDir,
+			MonitorConfigFiles: cfg.MonitorConfigFiles,
+			Host:               host,
+			Agent:              agent,
 		}))
 	}
 

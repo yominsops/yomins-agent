@@ -107,6 +107,7 @@ func (c *Collector) poll() []events.Event {
 		currentListen[l.key()] = l
 		if _, known := c.prevListen[l.key()]; !known {
 			evs = append(evs, c.makeConnectionOpenEvent(l, now))
+			evs = append(evs, c.makeSuspiciousPortEvent(l, now))
 		}
 	}
 	c.prevListen = currentListen
@@ -138,6 +139,25 @@ func (c *Collector) makeConnectionOpenEvent(l listenEntry, now time.Time) events
 			Proto:     l.Proto,
 		},
 		Tags: []string{"network", "listen"},
+	}
+}
+
+func (c *Collector) makeSuspiciousPortEvent(l listenEntry, now time.Time) events.Event {
+	return events.Event{
+		ID:         uuid.New().String(),
+		Timestamp:  now,
+		Type:       events.EventNetworkSuspiciousPort,
+		Category:   events.CategoryThreatActivity,
+		Severity:   events.SeverityWarning,
+		Confidence: events.ConfidenceMedium,
+		Host:       c.cfg.Host,
+		Agent:      c.cfg.Agent,
+		Network: &events.NetworkDetail{
+			LocalIP:   l.LocalIP,
+			LocalPort: l.LocalPort,
+			Proto:     l.Proto,
+		},
+		Tags: []string{"network", "suspicious_port"},
 	}
 }
 

@@ -5,13 +5,16 @@ package auth
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,15 +35,37 @@ func fileInode(fi os.FileInfo) uint64 {
 type Config struct {
 	WtmpPath    string // default: /var/log/wtmp
 	AuthLogPath string // default: /var/log/auth.log; falls back to /var/log/secure
-	StateDir    string // for persisting the wtmp byte cursor
-	Host        events.HostInfo
-	Agent       events.AgentInfo
+	StateDir    string // for persisting the wtmp byte cursor and login-IP state
+
+	BruteforceThreshold   int           // default: 5
+	BruteforceWindow      time.Duration // default: 30s
+	BruteforceSuppression time.Duration // default: 2m
+	IgnorePrivateIP       bool          // ignore loopback/private IPs for login_new_ip
+
+	Host  events.HostInfo
+	Agent events.AgentInfo
+}
+
+// bruteforceKey groups failed attempts by remote IP and username.
+type bruteforceKey struct {
+	RemoteIP string
+	User     string
+}
+
+// bruteforceEntry tracks the sliding window of failed attempts for one key.
+type bruteforceEntry struct {
+	attempts        []time.Time
+	suppressedUntil time.Time
 }
 
 // Collector watches /var/log/wtmp for login/logout events and
 // /var/log/auth.log for failed login and sudo events.
 type Collector struct {
 	cfg Config
+
+	mu           sync.Mutex
+	bfTracker    map[bruteforceKey]*bruteforceEntry
+	lastIPByUser map[string]string // user → last seen remote IP
 }
 
 // NewCollector creates a new AuthCollector.
@@ -67,7 +92,20 @@ func NewCollector(cfg Config) *Collector {
 			cfg.AuthLogPath = secure
 		}
 	}
-	return &Collector{cfg: cfg}
+	if cfg.BruteforceThreshold == 0 {
+		cfg.BruteforceThreshold = 5
+	}
+	if cfg.BruteforceWindow == 0 {
+		cfg.BruteforceWindow = 30 * time.Second
+	}
+	if cfg.BruteforceSuppression == 0 {
+		cfg.BruteforceSuppression = 2 * time.Minute
+	}
+	return &Collector{
+		cfg:          cfg,
+		bfTracker:    make(map[bruteforceKey]*bruteforceEntry),
+		lastIPByUser: loadLastIPByUser(cfg.StateDir),
+	}
 }
 
 func (c *Collector) Name() string { return "auth" }
@@ -86,6 +124,9 @@ func (c *Collector) Run(ctx context.Context, out chan<- events.Event) error {
 		go c.runJournalLog(ctx, sub)
 	}
 
+	gcTicker := time.NewTicker(time.Minute)
+	defer gcTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -99,6 +140,8 @@ func (c *Collector) Run(ctx context.Context, out chan<- events.Event) error {
 			case <-ctx.Done():
 				return nil
 			}
+		case <-gcTicker.C:
+			c.gcBruteforceTracker()
 		}
 	}
 }
@@ -161,11 +204,15 @@ func (c *Collector) runWtmp(ctx context.Context, out chan<- events.Event) {
 					cursor += int64(n)
 					rec, ok := parseRecord(buf)
 					if ok {
+						now := time.Now().UTC()
 						switch rec.Type {
 						case utUserProcess:
 							// Login records always carry a username.
 							if rec.User != "" {
 								out <- c.makeLoginEvent(rec)
+								if nipEv, triggered := c.checkNewIP(rec, now); triggered {
+									out <- nipEv
+								}
 							}
 						case utDeadProcess:
 							// Logout records have an empty ut_user by kernel convention;
@@ -305,11 +352,21 @@ func (c *Collector) runAuthLog(ctx context.Context, out chan<- events.Event) {
 				line, err := reader.ReadString('\n')
 				if len(line) > 0 {
 					line = strings.TrimRight(line, "\r\n")
+					now := time.Now().UTC()
 					if ev, ok := c.parseAuthLogLine(line); ok {
 						select {
 						case out <- ev:
 						case <-ctx.Done():
 							return
+						}
+						if ev.Type == events.EventAuthLoginFailed && ev.Actor != nil {
+							if bfEv, triggered := c.checkBruteforce(ev.Actor.User, ev.Actor.IP, now); triggered {
+								select {
+								case out <- bfEv:
+								case <-ctx.Done():
+									return
+								}
+							}
 						}
 					}
 				}
@@ -391,4 +448,194 @@ func (c *Collector) parseAuthLogLine(line string) (events.Event, bool) {
 	}
 
 	return events.Event{}, false
+}
+
+// ── bruteforce detection ──────────────────────────────────────────────────────
+
+// checkBruteforce records a failed login attempt for (user, remoteIP) and
+// returns a bruteforce event if the threshold is crossed.
+func (c *Collector) checkBruteforce(user, remoteIP string, now time.Time) (events.Event, bool) {
+	if remoteIP == "" {
+		return events.Event{}, false
+	}
+	key := bruteforceKey{RemoteIP: remoteIP, User: user}
+	cutoff := now.Add(-c.cfg.BruteforceWindow)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry := c.bfTracker[key]
+	if entry == nil {
+		entry = &bruteforceEntry{}
+		c.bfTracker[key] = entry
+	}
+
+	// Prune attempts outside the window.
+	j := 0
+	for _, t := range entry.attempts {
+		if t.After(cutoff) {
+			entry.attempts[j] = t
+			j++
+		}
+	}
+	entry.attempts = append(entry.attempts[:j], now)
+
+	count := len(entry.attempts)
+	slog.Debug("auth: bruteforce window", "ip", remoteIP, "user", user, "attempts", count)
+
+	if count >= c.cfg.BruteforceThreshold && now.After(entry.suppressedUntil) {
+		entry.suppressedUntil = now.Add(c.cfg.BruteforceSuppression)
+		slog.Warn("auth: bruteforce detected", "ip", remoteIP, "user", user, "attempts", count)
+		return events.Event{
+			ID:         uuid.New().String(),
+			Timestamp:  now,
+			Type:       events.EventAuthBruteforceDetected,
+			Category:   events.CategoryThreatActivity,
+			Severity:   events.SeverityCritical,
+			Confidence: events.ConfidenceHigh,
+			Host:       c.cfg.Host,
+			Agent:      c.cfg.Agent,
+			Actor: &events.ActorInfo{
+				User: user,
+				IP:   remoteIP,
+			},
+			Context: &events.ContextInfo{
+				Reason: "bruteforce",
+			},
+			Tags: []string{"auth", "bruteforce"},
+		}, true
+	}
+	return events.Event{}, false
+}
+
+// gcBruteforceTracker removes stale entries from the bruteforce tracker.
+func (c *Collector) gcBruteforceTracker() {
+	now := time.Now().UTC()
+	cutoff := now.Add(-c.cfg.BruteforceWindow)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for key, entry := range c.bfTracker {
+		j := 0
+		for _, t := range entry.attempts {
+			if t.After(cutoff) {
+				entry.attempts[j] = t
+				j++
+			}
+		}
+		entry.attempts = entry.attempts[:j]
+		if len(entry.attempts) == 0 && now.After(entry.suppressedUntil) {
+			delete(c.bfTracker, key)
+		}
+	}
+}
+
+// ── login_new_ip detection ────────────────────────────────────────────────────
+
+// checkNewIP returns a login_new_ip event if the user logged in from an IP
+// not seen before.
+func (c *Collector) checkNewIP(rec parsedRecord, now time.Time) (events.Event, bool) {
+	ip := rec.Host
+	if ip == "" {
+		return events.Event{}, false
+	}
+	if c.cfg.IgnorePrivateIP && isPrivateIP(ip) {
+		return events.Event{}, false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	prev, known := c.lastIPByUser[rec.User]
+	c.lastIPByUser[rec.User] = ip
+	saveLastIPByUser(c.cfg.StateDir, c.lastIPByUser)
+
+	if !known || prev == ip {
+		return events.Event{}, false
+	}
+
+	slog.Warn("auth: login from new IP", "user", rec.User, "previous_ip", prev, "current_ip", ip)
+	return events.Event{
+		ID:         uuid.New().String(),
+		Timestamp:  now,
+		Type:       events.EventAuthLoginNewIP,
+		Category:   events.CategoryThreatActivity,
+		Severity:   events.SeverityWarning,
+		Confidence: events.ConfidenceMedium,
+		Host:       c.cfg.Host,
+		Agent:      c.cfg.Agent,
+		Actor: &events.ActorInfo{
+			User: rec.User,
+			IP:   ip,
+		},
+		Context: &events.ContextInfo{
+			RemoteIP: prev,
+			Reason:   "new_ip",
+		},
+		Tags: []string{"auth", "new_ip"},
+	}, true
+}
+
+// ── login-IP state persistence ────────────────────────────────────────────────
+
+func lastIPPath(stateDir string) string {
+	return filepath.Join(stateDir, "auth_last_ip.json")
+}
+
+func loadLastIPByUser(stateDir string) map[string]string {
+	data, err := os.ReadFile(lastIPPath(stateDir))
+	if err != nil {
+		return make(map[string]string)
+	}
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
+		return make(map[string]string)
+	}
+	return m
+}
+
+func saveLastIPByUser(stateDir string, m map[string]string) {
+	if stateDir == "" {
+		return
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	path := lastIPPath(stateDir)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, path)
+}
+
+// ── private IP helper ─────────────────────────────────────────────────────────
+
+var privateNets []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+		_, n, _ := net.ParseCIDR(cidr)
+		if n != nil {
+			privateNets = append(privateNets, n)
+		}
+	}
+}
+
+func isPrivateIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	if parsed.IsLoopback() {
+		return true
+	}
+	for _, n := range privateNets {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }

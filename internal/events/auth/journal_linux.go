@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os/exec"
+	"time"
 
 	"github.com/yominsops/yomins-agent/internal/events"
 )
@@ -61,11 +62,21 @@ func (c *Collector) runJournalLog(ctx context.Context, out chan<- events.Event) 
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
+		now := time.Now().UTC()
 		if ev, ok := c.parseJournalLine(scanner.Text()); ok {
 			select {
 			case out <- ev:
 			case <-ctx.Done():
 				return
+			}
+			if ev.Type == events.EventAuthLoginFailed && ev.Actor != nil {
+				if bfEv, triggered := c.checkBruteforce(ev.Actor.User, ev.Actor.IP, now); triggered {
+					select {
+					case out <- bfEv:
+					case <-ctx.Done():
+						return
+					}
+				}
 			}
 		}
 	}

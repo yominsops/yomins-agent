@@ -43,6 +43,14 @@ type Config struct {
 	AuthLogPath              string   // default: /var/log/auth.log
 	SuspiciousPatterns       []string // CSV; defaults defined in process collector
 
+	// Threat detection
+	BruteforceThreshold   int           // --bruteforce-threshold / YOMINS_BRUTEFORCE_THRESHOLD; default: 5
+	BruteforceWindow      time.Duration // --bruteforce-window / YOMINS_BRUTEFORCE_WINDOW; default: 30s
+	BruteforceSuppression time.Duration // --bruteforce-suppression / YOMINS_BRUTEFORCE_SUPPRESSION; default: 2m
+	MonitorTmpPaths       bool          // --monitor-tmp-paths / YOMINS_MONITOR_TMP_PATHS; default: true
+	MonitorConfigFiles    bool          // --monitor-config-files / YOMINS_MONITOR_CONFIG_FILES; default: true
+	IgnorePrivateIP       bool          // --ignore-private-ip / YOMINS_IGNORE_PRIVATE_IP; default: true
+
 	// Event transport
 	EventFlushInterval time.Duration // default: 10s
 	EventBatchSize     int           // default: 200
@@ -91,6 +99,14 @@ func Load() (*Config, error) {
 	fs.StringVar(&cfg.WtmpPath, "wtmp-path", "/var/log/wtmp", "Path to wtmp file for login/logout event collection (YOMINS_WTMP_PATH)")
 	fs.StringVar(&cfg.AuthLogPath, "auth-log-path", "/var/log/auth.log", "Path to auth log file for failed login and sudo events (YOMINS_AUTH_LOG_PATH)")
 	fs.StringVar(&suspiciousPatternsRaw, "suspicious-patterns", "", "Comma-separated regex patterns for suspicious process detection (YOMINS_SUSPICIOUS_PATTERNS)")
+
+	// Threat detection flags
+	fs.IntVar(&cfg.BruteforceThreshold, "bruteforce-threshold", 5, "Number of failed logins within the window to trigger bruteforce detection (YOMINS_BRUTEFORCE_THRESHOLD)")
+	fs.DurationVar(&cfg.BruteforceWindow, "bruteforce-window", 30*time.Second, "Time window for bruteforce attempt counting (YOMINS_BRUTEFORCE_WINDOW)")
+	fs.DurationVar(&cfg.BruteforceSuppression, "bruteforce-suppression", 2*time.Minute, "Suppression period after a bruteforce event fires (YOMINS_BRUTEFORCE_SUPPRESSION)")
+	fs.BoolVar(&cfg.MonitorTmpPaths, "monitor-tmp-paths", true, "Detect process execution from /tmp, /var/tmp, /dev/shm (YOMINS_MONITOR_TMP_PATHS)")
+	fs.BoolVar(&cfg.MonitorConfigFiles, "monitor-config-files", true, "Detect changes to critical config files (/etc/passwd, sshd_config, etc.) (YOMINS_MONITOR_CONFIG_FILES)")
+	fs.BoolVar(&cfg.IgnorePrivateIP, "ignore-private-ip", true, "Ignore private/loopback IPs when tracking login-from-new-IP (YOMINS_IGNORE_PRIVATE_IP)")
 
 	// Event transport flags
 	fs.DurationVar(&cfg.EventFlushInterval, "event-flush-interval", 10*time.Second, "How often to flush buffered events to the server (YOMINS_EVENT_FLUSH_INTERVAL)")
@@ -260,6 +276,42 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
 				cfg.EventBatchSize = n
 			}
+		}
+	}
+	if !explicit["bruteforce-threshold"] {
+		if v := os.Getenv("YOMINS_BRUTEFORCE_THRESHOLD"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				cfg.BruteforceThreshold = n
+			}
+		}
+	}
+	if !explicit["bruteforce-window"] {
+		if v := os.Getenv("YOMINS_BRUTEFORCE_WINDOW"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				cfg.BruteforceWindow = d
+			}
+		}
+	}
+	if !explicit["bruteforce-suppression"] {
+		if v := os.Getenv("YOMINS_BRUTEFORCE_SUPPRESSION"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				cfg.BruteforceSuppression = d
+			}
+		}
+	}
+	if !explicit["monitor-tmp-paths"] {
+		if v := os.Getenv("YOMINS_MONITOR_TMP_PATHS"); v != "" {
+			cfg.MonitorTmpPaths = isTruthy(v)
+		}
+	}
+	if !explicit["monitor-config-files"] {
+		if v := os.Getenv("YOMINS_MONITOR_CONFIG_FILES"); v != "" {
+			cfg.MonitorConfigFiles = isTruthy(v)
+		}
+	}
+	if !explicit["ignore-private-ip"] {
+		if v := os.Getenv("YOMINS_IGNORE_PRIVATE_IP"); v != "" {
+			cfg.IgnorePrivateIP = isTruthy(v)
 		}
 	}
 }
