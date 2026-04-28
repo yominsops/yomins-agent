@@ -370,7 +370,7 @@ docker run -d \
   -v /var/log/auth.log:/var/log/auth.log:ro \
   --device /dev/kmsg:/dev/kmsg:r \
   -v yomins-agent-state:/var/lib/yomins/agent \
-  -e YOMINS_SERVER=https://ingest.yominsops.com \
+  -e YOMINS_SERVER=https://ingest.yominsops.com/v1/push \
   -e YOMINS_TOKEN=<PROJECT_TOKEN> \
   yominsops/yomins-agent:latest
 ```
