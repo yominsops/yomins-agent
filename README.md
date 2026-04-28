@@ -250,7 +250,7 @@ docker run -d \
   --net=host \
   -v /var/log/wtmp:/var/log/wtmp:ro \
   -v /var/log/auth.log:/var/log/auth.log:ro \
-  -v /dev/kmsg:/dev/kmsg:ro \
+  --device /dev/kmsg:/dev/kmsg:r \
   ...
 ```
 
@@ -260,7 +260,7 @@ docker run -d \
 | Auth (failed/sudo) | `-v /var/log/auth.log:/var/log/auth.log:ro` | Single warning, collector disabled |
 | Process (host PIDs) | `--pid=host` | Container-scoped PIDs only (no error) |
 | Network (host sockets) | `--net=host` | Container network namespace only (no error) |
-| OOM killer | `-v /dev/kmsg:/dev/kmsg:ro` + `CAP_SYSLOG` | Single warning, collector disabled |
+| OOM killer | `--device /dev/kmsg:/dev/kmsg:r` + `CAP_SYSLOG` | Single warning, collector disabled |
 | Reboot detection | None | Works from any namespace |
 
 ## Dry-run mode
@@ -359,17 +359,43 @@ On first start the agent generates a UUID (`agent_id`) and persists it to `$stat
 docker run -d \
   --name yomins-agent \
   --restart unless-stopped \
+  --user root \
   --pid=host \
+  --net=host \
+  --cap-add CAP_SYSLOG \
   -v /proc:/host/proc:ro \
   -v /sys:/host/sys:ro \
   -v /:/rootfs:ro \
+  -v /var/log/wtmp:/var/log/wtmp:ro \
+  -v /var/log/auth.log:/var/log/auth.log:ro \
+  --device /dev/kmsg:/dev/kmsg:r \
   -v yomins-agent-state:/var/lib/yomins/agent \
   -e YOMINS_SERVER=https://ingest.yominsops.com \
   -e YOMINS_TOKEN=<PROJECT_TOKEN> \
   yominsops/yomins-agent:latest
 ```
 
+`--user root` is required for `CAP_SYSLOG` to take effect in the process's effective capability set — without it the kernel rejects `/dev/kmsg` opens even when the capability is added. Given that this container already uses `--pid=host`, `--net=host`, and mounts the host rootfs, the nonroot restriction provides no meaningful security boundary.
+
+On Debian 13 (wtmp moved to `/var/log/wtmp.db`) replace the wtmp mount:
+
+```
+-v /var/log/wtmp.db:/var/log/wtmp.db:ro
+```
+
 The named volume `yomins-agent-state` persists the `agent_id` across container restarts.
+
+### Updating the Docker agent
+
+Pull the new image, then recreate the container:
+
+```bash
+docker pull yominsops/yomins-agent:latest
+docker stop yomins-agent && docker rm yomins-agent
+# re-run the docker run command above
+```
+
+The named volume `yomins-agent-state` is preserved by this sequence, so the agent keeps its existing `agent_id`.
 
 ## Development: serving install.sh locally
 
