@@ -250,6 +250,8 @@ Ports in LISTEN state at agent startup are the baseline. Only new ports emit eve
 | `system.user_deleted` | A username present in the snapshot disappears from `/etc/passwd` | `/etc/passwd` polled every 30 s |
 | `system.config_modified` | SHA-256 hash of a monitored file changes | `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/sudoers`, `/etc/ssh/sshd_config` polled every 30 s; state in `<state-dir>/file_state.json` |
 
+> **Systemd permissions note:** `/etc/shadow` requires the `shadow` group — the service unit adds it via `SupplementaryGroups=shadow`. `/etc/sudoers` (mode 440 `root:root`) and `/etc/ssh/sshd_config` on RHEL/CentOS (mode 600) are not readable by the service user; both are silently skipped when unreadable. Full coverage requires running the agent as root.
+
 ### Docker requirements for event collection
 
 Run the container with these flags to enable host-level event visibility:
@@ -262,6 +264,11 @@ docker run -d \
   -v /var/log/wtmp:/var/log/wtmp:ro \
   -v /var/log/auth.log:/var/log/auth.log:ro \
   --device /dev/kmsg:/dev/kmsg:r \
+  -v /etc/passwd:/etc/passwd:ro \
+  -v /etc/shadow:/etc/shadow:ro \
+  -v /etc/group:/etc/group:ro \
+  -v /etc/sudoers:/etc/sudoers:ro \
+  -v /etc/ssh/sshd_config:/etc/ssh/sshd_config:ro \
   ...
 ```
 
@@ -273,6 +280,8 @@ docker run -d \
 | Network (host sockets) | `--net=host` | Container network namespace only (no error) |
 | OOM killer | `--device /dev/kmsg:/dev/kmsg:r` + `CAP_SYSLOG` | Single warning, collector disabled |
 | Reboot detection | None | Works from any namespace |
+| User created/deleted | `-v /etc/passwd:/etc/passwd:ro` | Monitors container's passwd (not host); no error |
+| Config file monitoring | `-v /etc/passwd:…:ro`, `-v /etc/shadow:…:ro`, `-v /etc/group:…:ro`, `-v /etc/sudoers:…:ro`, `-v /etc/ssh/sshd_config:…:ro` | Monitors container's files; `/etc/sudoers` silently skipped if absent |
 
 ## Dry-run mode
 
@@ -386,6 +395,11 @@ docker run -d \
   -v /var/log/wtmp:/var/log/wtmp:ro \
   -v /var/log/auth.log:/var/log/auth.log:ro \
   --device /dev/kmsg:/dev/kmsg:r \
+  -v /etc/passwd:/etc/passwd:ro \
+  -v /etc/shadow:/etc/shadow:ro \
+  -v /etc/group:/etc/group:ro \
+  -v /etc/sudoers:/etc/sudoers:ro \
+  -v /etc/ssh/sshd_config:/etc/ssh/sshd_config:ro \
   -v yomins-agent-state:/var/lib/yomins/agent \
   -e YOMINS_SERVER=https://ingest.yominsops.com/v1/push \
   -e YOMINS_TOKEN=<PROJECT_TOKEN> \

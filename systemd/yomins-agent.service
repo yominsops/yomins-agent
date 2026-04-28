@@ -48,7 +48,7 @@ TimeoutStopSec=15s
 AmbientCapabilities=CAP_SYSLOG
 CapabilityBoundingSet=CAP_SYSLOG
 # Required for reading from journald
-SupplementaryGroups=systemd-journal adm
+SupplementaryGroups=systemd-journal adm shadow
 
 [Install]
 WantedBy=multi-user.target
