@@ -196,6 +196,8 @@ Domain-specific payloads (`process`, `network`) are added for relevant event typ
 
 The wtmp cursor is persisted to `<state-dir>/wtmp_cursor` so events missed during agent downtime are replayed on restart.
 
+On Debian 13 (trixie) the file is `/var/log/wtmp.db`; the agent falls back to that path automatically when `/var/log/wtmp` is absent.
+
 For `auth.login_failed` and `auth.sudo` the agent uses the first available source in this order:
 1. `--auth-log-path` (default: `/var/log/auth.log`) — used on Debian/Ubuntu with rsyslog/syslog-ng
 2. `/var/log/secure` — automatic fallback on RHEL/CentOS/AlmaLinux when `auth.log` is absent
@@ -254,7 +256,7 @@ docker run -d \
 
 | Collector | Required flag/mount | Without it |
 |---|---|---|
-| Auth (login/logout) | `-v /var/log/wtmp:/var/log/wtmp:ro` | Single warning, collector disabled |
+| Auth (login/logout) | `-v /var/log/wtmp:/var/log/wtmp:ro` (or `/var/log/wtmp.db` on Debian 13) | Single warning, collector disabled |
 | Auth (failed/sudo) | `-v /var/log/auth.log:/var/log/auth.log:ro` | Single warning, collector disabled |
 | Process (host PIDs) | `--pid=host` | Container-scoped PIDs only (no error) |
 | Network (host sockets) | `--net=host` | Container network namespace only (no error) |

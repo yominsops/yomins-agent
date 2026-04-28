@@ -48,6 +48,13 @@ func NewCollector(cfg Config) *Collector {
 	if cfg.WtmpPath == "" {
 		cfg.WtmpPath = "/var/log/wtmp"
 	}
+	// Debian 13 (trixie) uses wtmp.db instead of wtmp.
+	if _, err := os.Stat(cfg.WtmpPath); os.IsNotExist(err) {
+		const wtmpDB = "/var/log/wtmp.db"
+		if _, err2 := os.Stat(wtmpDB); err2 == nil {
+			cfg.WtmpPath = wtmpDB
+		}
+	}
 	if cfg.AuthLogPath == "" {
 		cfg.AuthLogPath = "/var/log/auth.log"
 	}
