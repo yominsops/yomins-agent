@@ -276,7 +276,7 @@ func (c *Collector) runAuthLog(ctx context.Context, out chan<- events.Event) {
 		prevInode = fileInode(fi)
 	}
 
-	scanner := bufio.NewScanner(f)
+	reader := bufio.NewReader(f)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -294,19 +294,28 @@ func (c *Collector) runAuthLog(ctx context.Context, out chan<- events.Event) {
 						slog.Warn("auth: auth log reopen failed after rotation", "error", err)
 						return
 					}
-					scanner = bufio.NewScanner(f)
+					reader = bufio.NewReader(f)
 					prevInode = fileInode(fi)
 				}
 			}
-			// Read all available new lines.
-			for scanner.Scan() {
-				line := scanner.Text()
-				if ev, ok := c.parseAuthLogLine(line); ok {
-					select {
-					case out <- ev:
-					case <-ctx.Done():
-						return
+			// Read all available new lines. bufio.Reader (unlike bufio.Scanner)
+			// does not permanently mark itself done on EOF, so subsequent ticks
+			// correctly pick up lines written after the previous read.
+			for {
+				line, err := reader.ReadString('\n')
+				if len(line) > 0 {
+					line = strings.TrimRight(line, "\r\n")
+					if ev, ok := c.parseAuthLogLine(line); ok {
+						select {
+						case out <- ev:
+						case <-ctx.Done():
+							return
+						}
 					}
+				}
+				if err != nil {
+					// io.EOF means no more data right now; try again next tick.
+					break
 				}
 			}
 		}
