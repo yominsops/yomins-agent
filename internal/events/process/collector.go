@@ -308,19 +308,14 @@ func (c *Collector) isReverseShell(cmdline string) bool {
 	return false
 }
 
-// isExecFromTmp returns true if the process binary or any cmdline token lives
-// under a temporary/world-writable directory.
-func isExecFromTmp(exe, cmdline string) bool {
+// isExecFromTmp returns true if the resolved binary path lives under a
+// temporary/world-writable directory. Cmdline tokens are intentionally not
+// checked: legitimate tools (runc, go test, …) pass /tmp paths as arguments,
+// which produces false positives without catching additional real threats.
+func isExecFromTmp(exe, _ string) bool {
 	for _, prefix := range defaultTmpPaths {
 		if strings.HasPrefix(exe, prefix) {
 			return true
-		}
-	}
-	for _, token := range strings.Fields(cmdline) {
-		for _, prefix := range defaultTmpPaths {
-			if strings.HasPrefix(token, prefix) {
-				return true
-			}
 		}
 	}
 	return false
