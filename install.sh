@@ -354,6 +354,34 @@ install_service() {
     chown "${SERVICE_NAME}:${SERVICE_NAME}" "${STATE_DIR}/upgrade"
     chmod 700 "${STATE_DIR}/upgrade"
 
+    # Filter SupplementaryGroups to only groups that exist on this system.
+    # Minimal containers (e.g. Docker AlmaLinux) often lack adm/shadow/systemd-journal,
+    # and systemd exits 216/GROUP if any listed group is missing.
+    local existing_groups=""
+    for grp in systemd-journal adm shadow; do
+        if getent group "$grp" &>/dev/null; then
+            existing_groups="${existing_groups:+$existing_groups }$grp"
+        fi
+    done
+    if [[ -n "$existing_groups" ]]; then
+        # Collapse the two SupplementaryGroups lines into one with only existing groups.
+        # Use a temp file to avoid sed -i portability issues.
+        local tmp_unit
+        tmp_unit="$(mktemp)"
+        awk -v groups="$existing_groups" '
+            /^SupplementaryGroups=/ { if (!done) { print "SupplementaryGroups=" groups; done=1 } next }
+            { print }
+        ' "$SERVICE_FILE" > "$tmp_unit" && mv "$tmp_unit" "$SERVICE_FILE"
+        chmod 644 "$SERVICE_FILE"
+    else
+        # No supplementary groups available — remove the directive entirely.
+        local tmp_unit
+        tmp_unit="$(mktemp)"
+        grep -v "^SupplementaryGroups=" "$SERVICE_FILE" > "$tmp_unit" && mv "$tmp_unit" "$SERVICE_FILE"
+        chmod 644 "$SERVICE_FILE"
+        warn "No supplementary groups found (systemd-journal/adm/shadow); journal/auth-log collection may be limited."
+    fi
+
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
     if systemctl is-active --quiet "$SERVICE_NAME"; then
