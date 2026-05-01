@@ -382,6 +382,11 @@ install_service() {
         warn "No supplementary groups found (systemd-journal/adm/shadow); journal/auth-log collection may be limited."
     fi
 
+    # Restore SELinux file context after the mv-from-/tmp replacement above.
+    # On RHEL/AlmaLinux with SELinux enforcing the file would get a tmp_t label,
+    # causing systemd to silently skip the unit during daemon-reload.
+    command -v restorecon &>/dev/null && restorecon "$SERVICE_FILE" || true
+
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
     if systemctl is-active --quiet "$SERVICE_NAME"; then
