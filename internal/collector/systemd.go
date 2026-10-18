@@ -56,7 +56,9 @@ func (c *SystemdCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, 
 				pts = append(pts, gauge("systemd_unit_failed", "1 for every unit in the failed state", 1, map[string]string{"unit": unit}))
 			}
 		}
-		if f[1] == "loaded" && matchesAny(unit, trackedServices) {
+		// Installed but stopped on purpose (apache2 next to nginx) is not
+		// "down"; failed units are counted above.
+		if f[1] == "loaded" && active != "inactive" && matchesAny(unit, trackedServices) {
 			tracked = append(tracked, unit)
 		}
 	}

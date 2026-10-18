@@ -192,7 +192,7 @@ func TestSystemd(t *testing.T) {
 	c.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch args[0] {
 		case "list-units":
-			return []byte("nginx.service loaded active running nginx\nphp8.3-fpm.service loaded active running PHP\nbackup.service loaded failed failed Backup\nfoo.mount loaded active mounted x\n"), nil
+			return []byte("nginx.service loaded active running nginx\nphp8.3-fpm.service loaded active running PHP\napache2.service loaded inactive dead Apache\nbackup.service loaded failed failed Backup\nfoo.mount loaded active mounted x\n"), nil
 		case "is-system-running":
 			return []byte("degraded\n"), errors.New("exit status 1")
 		case "show":
