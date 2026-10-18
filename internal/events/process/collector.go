@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	gopsprocess "github.com/shirou/gopsutil/v3/process"
 	"github.com/yominsops/yomins-agent/internal/events"
 )
 
@@ -52,17 +51,13 @@ type Config struct {
 	Agent              events.AgentInfo
 }
 
-// processLister is a function that returns the current process list.
-// Decoupled from gopsutil to allow injection in tests.
-type processLister func(ctx context.Context) ([]*gopsprocess.Process, error)
-
 // Collector watches for new/exited processes and detects resource anomalies
 // and suspicious command lines.
 type Collector struct {
 	cfg             Config
 	patterns        []*regexp.Regexp // suspicious patterns (process.suspicious)
 	reverseShells   []*regexp.Regexp // reverse-shell patterns (process.reverse_shell)
-	lister          processLister
+	source          procSource
 
 	mu    sync.Mutex
 	procs map[int32]*ProcessSnapshot // PID → snapshot
@@ -70,12 +65,12 @@ type Collector struct {
 
 // NewCollector creates a ProcessCollector with the given config.
 func NewCollector(cfg Config) *Collector {
-	return newCollectorWithLister(cfg, gopsprocess.ProcessesWithContext)
+	return newCollectorWithSource(cfg, newProcfs())
 }
 
-// newCollectorWithLister creates a ProcessCollector with a custom process lister.
+// newCollectorWithSource creates a ProcessCollector with a custom process source.
 // Used in tests to inject a fake process list without OS interaction.
-func newCollectorWithLister(cfg Config, lister processLister) *Collector {
+func newCollectorWithSource(cfg Config, source procSource) *Collector {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 2 * time.Second
 	}
@@ -119,7 +114,7 @@ func newCollectorWithLister(cfg Config, lister processLister) *Collector {
 		cfg:           cfg,
 		patterns:      compiled,
 		reverseShells: reverseShells,
-		lister:        lister,
+		source:        source,
 		procs:         make(map[int32]*ProcessSnapshot),
 	}
 }
@@ -156,17 +151,15 @@ func (c *Collector) Run(ctx context.Context, out chan<- events.Event) error {
 // buildBaseline captures the current process set as a baseline.
 // Processes in the baseline never emit start/stop events.
 func (c *Collector) buildBaseline(ctx context.Context) error {
-	procs, err := c.lister(ctx)
+	procs, err := c.source.List(ctx)
 	if err != nil {
 		return err
 	}
+	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, p := range procs {
-		snap := c.snapshotProcess(ctx, p, false)
-		if snap != nil {
-			c.procs[p.Pid] = snap
-		}
+		c.procs[p.PID] = c.snapshotProcess(p, false, now)
 	}
 	return nil
 }
@@ -174,76 +167,57 @@ func (c *Collector) buildBaseline(ctx context.Context) error {
 // poll compares the current process set against the known state and returns
 // all events that should be emitted.
 func (c *Collector) poll(ctx context.Context) []events.Event {
-	procs, err := c.lister(ctx)
+	procs, err := c.source.List(ctx)
 	if err != nil {
 		slog.Warn("process: failed to list processes", "error", err)
 		return nil
 	}
 
-	currentPIDs := make(map[int32]struct{}, len(procs))
+	nowMono := time.Now()
+	now := nowMono.UTC()
+	memTotal := c.source.MemTotal()
+	current := make(map[int32]procSample, len(procs))
 	for _, p := range procs {
-		currentPIDs[p.Pid] = struct{}{}
+		current[p.PID] = p
 	}
 
 	var evs []events.Event
-	now := time.Now().UTC()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Detect new processes.
-	for _, p := range procs {
-		if _, known := c.procs[p.Pid]; known {
+	// Detect exited processes (a reused PID counts as exited and new).
+	for pid, snap := range c.procs {
+		if p, alive := current[pid]; alive && p.Start == snap.start {
 			continue
 		}
-		snap := c.snapshotProcess(ctx, p, true)
-		if snap == nil {
-			continue
+		if snap.isNew && c.cfg.MonitorLifecycle {
+			evs = append(evs, c.makeStopEvent(snap, now))
 		}
-		c.procs[p.Pid] = snap
-
-		if c.cfg.MonitorLifecycle {
-			evs = append(evs, c.makeStartEvent(snap, now))
-		}
-
-		// Check for execution from temporary directories.
-		if c.cfg.MonitorTmpPaths && isExecFromTmp(snap.Exe, snap.Cmdline) {
-			evs = append(evs, c.makeExecTmpEvent(snap, now))
-		}
-
-		// Check for reverse shell patterns first (more specific), then other suspicious patterns.
-		if c.isReverseShell(snap.Cmdline) {
-			evs = append(evs, c.makeReverseShellEvent(snap, now))
-		} else if c.isSuspicious(snap.Cmdline) {
-			evs = append(evs, c.makeSuspiciousEvent(snap, now))
-		}
+		delete(c.procs, pid)
 	}
 
-	// Detect exited and anomalous processes.
-	for pid, snap := range c.procs {
-		if _, alive := currentPIDs[pid]; !alive {
-			if snap.isNew && c.cfg.MonitorLifecycle {
-				evs = append(evs, c.makeStopEvent(snap, now))
-			}
-			delete(c.procs, pid)
+	for _, p := range procs {
+		snap, known := c.procs[p.PID]
+		if !known {
+			snap = c.snapshotProcess(p, true, nowMono)
+			c.procs[p.PID] = snap
+			evs = append(evs, c.newProcessEvents(snap, now)...)
 			continue
 		}
 
-		// Update metrics for surviving processes and check for anomalies.
-		// Use the stored proc object: CPUPercentWithContext computes a delta
-		// between consecutive calls on the same instance; a fresh object always
-		// returns 0 on its first call.
-		if snap.proc == nil {
-			continue
+		// Surviving process: CPU is the share of one core used since the last poll.
+		elapsed := nowMono.Sub(snap.sampledAt).Seconds()
+		var cpu float64
+		if elapsed > 0 && p.CPU >= snap.cpuTicks {
+			cpu = float64(p.CPU-snap.cpuTicks) / c.source.ClockTicks() / elapsed * 100
 		}
-		cpu, _ := snap.proc.CPUPercentWithContext(ctx)
-		mem, _ := snap.proc.MemoryPercentWithContext(ctx)
-		cpuAvg, memAvg := snap.pushMetrics(cpu, float32(mem))
-
-		slog.Debug("process: anomaly check",
-			"pid", snap.PID, "name", snap.Name,
-			"cpu", cpu, "cpu_avg", cpuAvg, "cpu_ready", snap.readyForAnomaly(),
-			"mem", mem, "mem_avg", memAvg)
+		snap.cpuTicks, snap.sampledAt = p.CPU, nowMono
+		var mem float32
+		if memTotal > 0 {
+			mem = float32(float64(p.RSS) / float64(memTotal) * 100)
+		}
+		cpuAvg, memAvg := snap.pushMetrics(cpu, mem)
 
 		if !snap.readyForAnomaly() {
 			continue
@@ -256,10 +230,10 @@ func (c *Collector) poll(ctx context.Context) []events.Event {
 			snap.lastCPUAlertAt = now
 		}
 
-		if float64(mem) > float64(c.cfg.MemAlertThreshold) &&
+		if mem > c.cfg.MemAlertThreshold &&
 			(memAvg == 0 || mem > c.cfg.MemAlertMultiplier*memAvg) &&
 			now.Sub(snap.lastMemAlertAt) > c.cfg.AlertCooldown {
-			evs = append(evs, c.makeMemEvent(snap, float32(mem), memAvg, now))
+			evs = append(evs, c.makeMemEvent(snap, mem, memAvg, now))
 			snap.lastMemAlertAt = now
 		}
 	}
@@ -267,26 +241,44 @@ func (c *Collector) poll(ctx context.Context) []events.Event {
 	return evs
 }
 
-// snapshotProcess reads process metadata from gopsutil and returns a snapshot.
-// Returns nil if the process has already exited or can't be read.
-func (c *Collector) snapshotProcess(ctx context.Context, p *gopsprocess.Process, isNew bool) *ProcessSnapshot {
-	name, _ := p.NameWithContext(ctx)
-	ppid, _ := p.PpidWithContext(ctx)
-	exe, _ := p.ExeWithContext(ctx)
-	cmdlineSlice, _ := p.CmdlineSliceWithContext(ctx)
-	cmdline := strings.Join(cmdlineSlice, " ")
-	if cmdline == "" {
-		cmdline, _ = p.CmdlineWithContext(ctx)
+// newProcessEvents returns the events a process that appeared after startup triggers.
+func (c *Collector) newProcessEvents(snap *ProcessSnapshot, now time.Time) []events.Event {
+	var evs []events.Event
+	if c.cfg.MonitorLifecycle {
+		evs = append(evs, c.makeStartEvent(snap, now))
 	}
 
+	// Check for execution from temporary directories.
+	if c.cfg.MonitorTmpPaths && isExecFromTmp(snap.Exe, snap.Cmdline) {
+		evs = append(evs, c.makeExecTmpEvent(snap, now))
+	}
+
+	// Check for reverse shell patterns first (more specific), then other suspicious patterns.
+	if c.isReverseShell(snap.Cmdline) {
+		evs = append(evs, c.makeReverseShellEvent(snap, now))
+	} else if c.isSuspicious(snap.Cmdline) {
+		evs = append(evs, c.makeSuspiciousEvent(snap, now))
+	}
+	return evs
+}
+
+// snapshotProcess starts tracking a process. The binary path and command line
+// are read once here; a process that has exited already gets empty ones.
+func (c *Collector) snapshotProcess(p procSample, isNew bool, now time.Time) *ProcessSnapshot {
+	exe, cmdline := c.source.Details(p.PID)
+	if cmdline == "" {
+		cmdline = p.Name
+	}
 	return &ProcessSnapshot{
-		PID:     p.Pid,
-		PPID:    int32(ppid),
-		Name:    name,
-		Exe:     exe,
-		Cmdline: cmdline,
-		isNew:   isNew,
-		proc:    p,
+		PID:       p.PID,
+		PPID:      p.PPID,
+		Name:      p.Name,
+		Exe:       exe,
+		Cmdline:   cmdline,
+		isNew:     isNew,
+		start:     p.Start,
+		cpuTicks:  p.CPU,
+		sampledAt: now,
 	}
 }
 

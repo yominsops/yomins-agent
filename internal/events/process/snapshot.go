@@ -2,8 +2,6 @@ package process
 
 import (
 	"time"
-
-	gopsprocess "github.com/shirou/gopsutil/v3/process"
 )
 
 const rollingWindowSize = 5
@@ -21,10 +19,13 @@ type ProcessSnapshot struct {
 	// Baseline processes (present at startup) have isNew=false.
 	isNew bool
 
-	// proc is the gopsutil Process object reused across poll ticks.
-	// CPUPercentWithContext computes a delta between consecutive calls on the
-	// SAME object; using a freshly-created object every poll always returns 0.
-	proc *gopsprocess.Process
+	// start is the process start time in clock ticks; a PID whose start time
+	// changes was reused by another process.
+	start uint64
+	// cpuTicks and sampledAt are the CPU time seen at the last poll and when;
+	// the next poll turns their difference into a CPU percentage.
+	cpuTicks  uint64
+	sampledAt time.Time
 
 	// Rolling windows for anomaly detection (circular buffers).
 	cpuHistory    [rollingWindowSize]float64

