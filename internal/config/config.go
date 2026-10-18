@@ -29,20 +29,20 @@ type Config struct {
 	ExcludeMountpoints     []string
 	ExcludeInterfaces      []string
 	IncludeInterfaces      []string // --include-interfaces / YOMINS_INCLUDE_INTERFACES
-	DisableKernelCareInfo  bool   // --disable-kernelcare-info / YOMINS_DISABLE_KERNELCARE_INFO
-	VirtualizationOverride string // --virtualization-override / YOMINS_VIRTUALIZATION_OVERRIDE
+	DisableKernelCareInfo  bool     // --disable-kernelcare-info / YOMINS_DISABLE_KERNELCARE_INFO
+	VirtualizationOverride string   // --virtualization-override / YOMINS_VIRTUALIZATION_OVERRIDE
 
 	// Event collection
-	DisableEvents            bool
-	DisableAuthEvents        bool
-	DisableProcessEvents     bool
-	DisableNetworkEvents     bool
-	DisableSystemEvents      bool
-	MonitorProcessLifecycle  bool     // --monitor-process-lifecycle / YOMINS_MONITOR_PROCESS_LIFECYCLE
-	EventBufferSize          int      // default: 10000
-	WtmpPath                 string   // default: /var/log/wtmp
-	AuthLogPath              string   // default: /var/log/auth.log
-	SuspiciousPatterns       []string // CSV; defaults defined in process collector
+	DisableEvents           bool
+	DisableAuthEvents       bool
+	DisableProcessEvents    bool
+	DisableNetworkEvents    bool
+	DisableSystemEvents     bool
+	MonitorProcessLifecycle bool     // --monitor-process-lifecycle / YOMINS_MONITOR_PROCESS_LIFECYCLE
+	EventBufferSize         int      // default: 10000
+	WtmpPath                string   // default: /var/log/wtmp
+	AuthLogPath             string   // default: /var/log/auth.log
+	SuspiciousPatterns      []string // CSV; defaults defined in process collector
 
 	// Threat detection
 	BruteforceThreshold   int           // --bruteforce-threshold / YOMINS_BRUTEFORCE_THRESHOLD; default: 5
@@ -55,6 +55,12 @@ type Config struct {
 	// Event transport
 	EventFlushInterval time.Duration // default: 10s
 	EventBatchSize     int           // default: 200
+
+	// Logs
+	Logs       string   // --logs / YOMINS_LOGS: "off" (default) or "auto"
+	LogPaths   []string // --log-paths / YOMINS_LOG_PATHS: extra globs to read
+	LogExclude []string // --log-exclude / YOMINS_LOG_EXCLUDE: globs never read
+	LogAllow   []string // --log-allow / YOMINS_LOG_ALLOW: the only places logs may be read from
 }
 
 // Load parses configuration from CLI flags and environment variables.
@@ -119,6 +125,13 @@ func Load() (*Config, error) {
 	fs.DurationVar(&cfg.EventFlushInterval, "event-flush-interval", 10*time.Second, "How often to flush buffered events to the server (YOMINS_EVENT_FLUSH_INTERVAL)")
 	fs.IntVar(&cfg.EventBatchSize, "event-batch-size", 200, "Maximum number of events per HTTP request (YOMINS_EVENT_BATCH_SIZE)")
 
+	// Log flags
+	var logPathsRaw, logExcludeRaw, logAllowRaw string
+	fs.StringVar(&cfg.Logs, "logs", "off", "Log collection: off or auto (YOMINS_LOGS)")
+	fs.StringVar(&logPathsRaw, "log-paths", "", "Comma-separated extra log file globs (YOMINS_LOG_PATHS)")
+	fs.StringVar(&logExcludeRaw, "log-exclude", "", "Comma-separated globs of log files never to read (YOMINS_LOG_EXCLUDE)")
+	fs.StringVar(&logAllowRaw, "log-allow", "", "Comma-separated globs logs may be read from; ** spans directories (YOMINS_LOG_ALLOW; default: /var/log/** and common app log dirs)")
+
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, fmt.Errorf("parse flags: %w", err)
 	}
@@ -155,6 +168,25 @@ func Load() (*Config, error) {
 			suspiciousPatternsRaw = v
 		}
 	}
+
+	for flagName, env := range map[string]string{"log-paths": "YOMINS_LOG_PATHS", "log-exclude": "YOMINS_LOG_EXCLUDE", "log-allow": "YOMINS_LOG_ALLOW"} {
+		if explicitFlags[flagName] {
+			continue
+		}
+		if v := os.Getenv(env); v != "" {
+			switch flagName {
+			case "log-paths":
+				logPathsRaw = v
+			case "log-exclude":
+				logExcludeRaw = v
+			case "log-allow":
+				logAllowRaw = v
+			}
+		}
+	}
+	cfg.LogPaths = parseCSV(logPathsRaw)
+	cfg.LogExclude = parseCSV(logExcludeRaw)
+	cfg.LogAllow = parseCSV(logAllowRaw)
 
 	cfg.ExcludeMountpoints = parseCSV(excludeMountpointsRaw)
 	cfg.ExcludeInterfaces = parseCSV(excludeInterfacesRaw)
@@ -260,6 +292,11 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 			cfg.MonitorProcessLifecycle = true
 		}
 	}
+	if !explicit["logs"] {
+		if v := os.Getenv("YOMINS_LOGS"); v != "" {
+			cfg.Logs = strings.ToLower(strings.TrimSpace(v))
+		}
+	}
 	if !explicit["event-buffer-size"] {
 		if v := os.Getenv("YOMINS_EVENT_BUFFER_SIZE"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -344,6 +381,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Interval <= 0 {
 		errs = append(errs, "--interval must be a positive duration")
+	}
+	if c.Logs != "" && c.Logs != "off" && c.Logs != "auto" {
+		errs = append(errs, "--logs must be off or auto")
 	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))

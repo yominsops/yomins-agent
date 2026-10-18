@@ -89,16 +89,21 @@ func run() error {
 	})
 	upgradeManager.RunOnce(ctx)
 
-	// 6. Build collector registry. A collector may use up to half the interval
-	// so a slow one cannot delay the push into the next tick.
-	collectors := buildCollectors(cfg)
-	reg := collector.NewRegistry(collectors...).WithTimeout(min(cfg.Interval/2, collector.DefaultCollectTimeout))
-
-	// 6b. Start event collection pipeline (Linux only; no-op on other platforms).
-	// The metrics and event transports share one session: a 401/403 on
-	// either pauses both.
+	// 6. Start event collection pipeline (Linux only; no-op on other platforms).
+	// The metrics, event and log transports share one session: a 401/403 on
+	// any of them pauses all.
 	session := transport.NewSession()
 	startEventPipeline(ctx, cfg, hostname, session)
+
+	// 6b. Start log shipping (when enabled); its counters go out with the metrics.
+	collectors := buildCollectors(cfg)
+	if stats := startLogPipeline(ctx, cfg, hostname, id.AgentID, session); stats != nil {
+		collectors = append(collectors, stats)
+	}
+
+	// 6c. Build collector registry. A collector may use up to half the interval
+	// so a slow one cannot delay the push into the next tick.
+	reg := collector.NewRegistry(collectors...).WithTimeout(min(cfg.Interval/2, collector.DefaultCollectTimeout))
 
 	// 7. Create self-metrics collector.
 	self := collector.NewSelfMetricsCollector(id.AgentID, time.Now())
