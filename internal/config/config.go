@@ -62,6 +62,14 @@ type Config struct {
 	LogExclude []string // --log-exclude / YOMINS_LOG_EXCLUDE: globs never read
 	LogAllow   []string // --log-allow / YOMINS_LOG_ALLOW: the only places logs may be read from
 
+	LogRedact []string // extra patterns masked in log lines (remote configuration)
+
+	// DisabledCollectors are metric collectors not run (remote configuration).
+	DisabledCollectors []string
+	// RemoteConfig is how far the server's configuration is trusted:
+	// full (default), limited or off (--remote-config / YOMINS_REMOTE_CONFIG).
+	RemoteConfig string
+
 	// Integrations
 	DisableIntegrations bool     // --disable-integrations / YOMINS_DISABLE_INTEGRATIONS
 	NginxStatusURL      string   // --nginx-status-url / YOMINS_NGINX_STATUS_URL
@@ -137,6 +145,8 @@ func Load() (*Config, error) {
 	fs.StringVar(&logPathsRaw, "log-paths", "", "Comma-separated extra log file globs (YOMINS_LOG_PATHS)")
 	fs.StringVar(&logExcludeRaw, "log-exclude", "", "Comma-separated globs of log files never to read (YOMINS_LOG_EXCLUDE)")
 	fs.StringVar(&logAllowRaw, "log-allow", "", "Comma-separated globs logs may be read from; ** spans directories (YOMINS_LOG_ALLOW; default: /var/log/** and common app log dirs)")
+
+	fs.StringVar(&cfg.RemoteConfig, "remote-config", "full", "Trust in the configuration set in the portal: full, limited (nothing that chooses what is read) or off (YOMINS_REMOTE_CONFIG)")
 
 	// Integration flags
 	var scrapeURLsRaw string
@@ -311,6 +321,11 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 			cfg.MonitorProcessLifecycle = true
 		}
 	}
+	if !explicit["remote-config"] {
+		if v := os.Getenv("YOMINS_REMOTE_CONFIG"); v != "" {
+			cfg.RemoteConfig = strings.ToLower(strings.TrimSpace(v))
+		}
+	}
 	if !explicit["disable-integrations"] {
 		if v := os.Getenv("YOMINS_DISABLE_INTEGRATIONS"); isTruthy(v) {
 			cfg.DisableIntegrations = true
@@ -415,6 +430,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Interval <= 0 {
 		errs = append(errs, "--interval must be a positive duration")
+	}
+	switch c.RemoteConfig {
+	case "", "full", "limited", "off":
+	default:
+		errs = append(errs, "--remote-config must be full, limited or off")
 	}
 	if c.Logs != "" && c.Logs != "off" && c.Logs != "auto" {
 		errs = append(errs, "--logs must be off or auto")

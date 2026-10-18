@@ -20,7 +20,7 @@ func startLogPipeline(ctx context.Context, cfg *config.Config, hostname, agentID
 	if len(allow) == 0 {
 		allow = logs.DefaultAllow
 	}
-	redactor, err := logs.NewRedactor(nil)
+	redactor, err := logs.NewRedactor(cfg.LogRedact)
 	if err != nil {
 		slog.Error("logs: redaction rules invalid, logs not collected", "error", err)
 		return nil

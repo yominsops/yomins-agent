@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/yominsops/yomins-agent/internal/config"
 	"github.com/yominsops/yomins-agent/internal/identity"
 	"github.com/yominsops/yomins-agent/internal/integrations"
+	"github.com/yominsops/yomins-agent/internal/remote"
 	"github.com/yominsops/yomins-agent/internal/transport"
 	"github.com/yominsops/yomins-agent/internal/upgrade"
 	"github.com/yominsops/yomins-agent/internal/version"
@@ -81,6 +83,23 @@ func run() error {
 	id := identity.Load(cfg.StateDir)
 	slog.Info("agent identity", "agent_id", id.AgentID)
 
+	// 5a. Apply the configuration set in the portal, as last fetched.
+	remoteVersion := ""
+	if stored, ok := remote.Load(cfg.StateDir); ok && cfg.RemoteConfig != remote.ModeOff {
+		if err := remote.Validate(stored.Config); err != nil {
+			slog.Warn("remote config: stored configuration refused", "error", err)
+		} else {
+			remote.Apply(cfg, stored.Config, cfg.RemoteConfig)
+			remoteVersion = stored.Version
+			slog.Info("remote config applied", "version", stored.Version, "mode", cfg.RemoteConfig)
+		}
+	}
+	// A new configuration ends this run (after the final push); systemd
+	// starts the agent again and it applies the saved configuration.
+	ctx, restartForConfig := context.WithCancel(ctx)
+	defer restartForConfig()
+	var restartVersion atomic.Value
+
 	// 5b. Check for available upgrades and stage if found.
 	// RunOnce calls os.Exit(0) if an upgrade is staged; otherwise it returns
 	// quickly (< 15s timeout) and normal startup continues.
@@ -99,7 +118,7 @@ func run() error {
 	startEventPipeline(ctx, cfg, hostname, session)
 
 	// 6b. Start log shipping (when enabled); its counters go out with the metrics.
-	collectors := buildCollectors(cfg)
+	collectors := append(buildCollectors(cfg), remote.InfoCollector{Version: remoteVersion, Mode: cfg.RemoteConfig})
 	if stats := startLogPipeline(ctx, cfg, hostname, id.AgentID, session); stats != nil {
 		collectors = append(collectors, stats)
 	}
@@ -136,11 +155,45 @@ func run() error {
 
 	upgradeManager.RunPeriodic(ctx)
 
-	return ag.Run(ctx)
+	fetcher := &remote.Fetcher{
+		Server: cfg.Server, Token: cfg.Token, Hostname: hostname, StateDir: cfg.StateDir, Mode: cfg.RemoteConfig,
+		Current: remoteVersion, Started: time.Now(), Session: session,
+		Restart: func(v string) {
+			restartVersion.Store(v)
+			restartForConfig()
+		},
+	}
+	go fetcher.Run(ctx)
+
+	err = ag.Run(ctx)
+	if v, ok := restartVersion.Load().(string); ok {
+		slog.Info("restarting to apply the new configuration", "version", v)
+		return nil
+	}
+	return err
 }
 
-// buildCollectors constructs the collector slice based on configuration flags.
+// buildCollectors constructs the collector slice based on configuration
+// flags, without the collectors the configuration disables.
 func buildCollectors(cfg *config.Config) []collector.Collector {
+	all := allCollectors(cfg)
+	if len(cfg.DisabledCollectors) == 0 {
+		return all
+	}
+	off := map[string]bool{}
+	for _, n := range cfg.DisabledCollectors {
+		off[n] = true
+	}
+	kept := all[:0]
+	for _, c := range all {
+		if !off[c.Name()] {
+			kept = append(kept, c)
+		}
+	}
+	return kept
+}
+
+func allCollectors(cfg *config.Config) []collector.Collector {
 	collectors := []collector.Collector{
 		collector.NewCPUCollector(),
 		collector.NewMemoryCollector(),
