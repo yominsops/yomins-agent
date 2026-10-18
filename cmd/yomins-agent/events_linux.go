@@ -22,7 +22,7 @@ import (
 // startEventPipeline builds and starts the event collection pipeline in a
 // background goroutine. It returns immediately; the pipeline runs until ctx
 // is cancelled. This function is a no-op if cfg.DisableEvents is true.
-func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string) {
+func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string, session *transport.Session) {
 	if cfg.DisableEvents {
 		return
 	}
@@ -97,6 +97,7 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 			FlushInterval:      cfg.EventFlushInterval,
 			BatchSize:          cfg.EventBatchSize,
 			InsecureSkipVerify: cfg.InsecureSkipVerify,
+			Session:            session,
 		}, pipeline.Buffer())
 		go func() {
 			if err := et.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

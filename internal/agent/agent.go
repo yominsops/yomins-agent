@@ -113,9 +113,13 @@ func (a *Agent) tick(ctx context.Context) {
 
 	a.self.RecordPush(pushDuration, err)
 
-	if err != nil {
+	switch {
+	case transport.IsRejection(err):
+		// The transport logs rejections and pauses once, not every tick.
+		slog.Debug("push skipped", "error", err)
+	case err != nil:
 		slog.Error("push failed", "error", err, "duration", pushDuration.Round(time.Millisecond))
-	} else {
+	default:
 		slog.Info("push succeeded",
 			"points", len(ms.Points),
 			"collect_ms", collectDuration.Milliseconds(),

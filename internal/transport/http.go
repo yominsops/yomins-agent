@@ -22,6 +22,8 @@ type HTTPConfig struct {
 	Token              string
 	Interval           time.Duration
 	InsecureSkipVerify bool
+	// Session is shared with the event transport; nil gets a private one.
+	Session *Session
 }
 
 // HTTPTransport pushes metric payloads to a remote HTTPS endpoint.
@@ -37,6 +39,9 @@ func NewHTTPTransport(cfg HTTPConfig) *HTTPTransport {
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: cfg.InsecureSkipVerify, //nolint:gosec // explicitly opt-in flag
 	}
+	if cfg.Session == nil {
+		cfg.Session = NewSession()
+	}
 	return &HTTPTransport{
 		cfg: cfg,
 		client: &http.Client{
@@ -49,7 +54,11 @@ func NewHTTPTransport(cfg HTTPConfig) *HTTPTransport {
 }
 
 // Push serialises the MetricSet and delivers it to the configured endpoint.
+// While the server rejects the agent it returns ErrPaused without sending.
 func (t *HTTPTransport) Push(ctx context.Context, ms metrics.MetricSet) error {
+	if t.cfg.Session.Paused() {
+		return ErrPaused
+	}
 	payload, err := metrics.Encode(ms)
 	if err != nil {
 		return fmt.Errorf("encode metrics: %w", err)
@@ -83,13 +92,17 @@ func (t *HTTPTransport) Push(ctx context.Context, ms metrics.MetricSet) error {
 
 // do performs a single HTTP POST attempt.
 func (t *HTTPTransport) do(ctx context.Context, payload []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.cfg.Server+"/metrics", bytes.NewReader(payload))
+	body, encoding := t.cfg.Session.encode(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.cfg.Server+"/metrics", bytes.NewReader(body))
 	if err != nil {
 		return backoff.Permanent(fmt.Errorf("create request: %w", err))
 	}
 
 	req.Header.Set("Content-Type", metrics.ContentType)
 	req.Header.Set("Authorization", "Bearer "+t.cfg.Token)
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
+	}
 
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -99,7 +112,15 @@ func (t *HTTPTransport) do(ctx context.Context, payload []byte) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		t.cfg.Session.accepted(resp)
 		return nil
+	}
+
+	// 401/403: the server refuses this agent; pause every push.
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		rej := rejection(resp)
+		t.cfg.Session.reject(rej)
+		return backoff.Permanent(rej)
 	}
 
 	// 4xx errors (except 429) are permanent — do not retry.

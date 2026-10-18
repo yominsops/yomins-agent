@@ -57,7 +57,7 @@ func run() error {
 	// 4. Dry-run mode: print metrics to stdout, skip server/identity/upgrades.
 	if cfg.DryRun {
 		fmt.Fprintf(os.Stderr, "dry-run mode: collecting every %s, printing to stdout (Ctrl-C to stop)\n", cfg.Interval)
-		startEventPipeline(ctx, cfg, hostname)
+		startEventPipeline(ctx, cfg, hostname, nil)
 		collectors := buildCollectors(cfg)
 		reg := collector.NewRegistry(collectors...)
 		self := collector.NewSelfMetricsCollector("dry-run", time.Now())
@@ -94,7 +94,10 @@ func run() error {
 	reg := collector.NewRegistry(collectors...)
 
 	// 6b. Start event collection pipeline (Linux only; no-op on other platforms).
-	startEventPipeline(ctx, cfg, hostname)
+	// The metrics and event transports share one session: a 401/403 on
+	// either pauses both.
+	session := transport.NewSession()
+	startEventPipeline(ctx, cfg, hostname, session)
 
 	// 7. Create self-metrics collector.
 	self := collector.NewSelfMetricsCollector(id.AgentID, time.Now())
@@ -105,6 +108,7 @@ func run() error {
 		Token:              cfg.Token,
 		Interval:           cfg.Interval,
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		Session:            session,
 	})
 
 	// 9. Create and run agent.
