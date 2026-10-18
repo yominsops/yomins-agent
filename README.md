@@ -119,6 +119,47 @@ Static/semi-static metadata collected once per push cycle. Each metric is omitte
 
 > **`dmidecode` note:** Install with `apt install dmidecode` or `yum install dmidecode`. The agent must run as root (or with `CAP_SYS_RAWIO`) for dmidecode to access DMI tables. When unavailable, `memory_hardware_info` (total RAM) is still emitted from `/proc/meminfo`; only the per-DIMM `memory_module_info` metrics are skipped.
 
+### Host health (Linux)
+
+Read from `/proc` and `/sys` on every push, except where noted.
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `disk_reads_completed_total`, `disk_writes_completed_total` | Counter | I/O operations per device (`device`: whole disks, md, dm) |
+| `disk_read_bytes_total`, `disk_written_bytes_total` | Counter | Bytes read and written |
+| `disk_read_time_seconds_total`, `disk_write_time_seconds_total` | Counter | Time spent on reads / writes (latency = rate of time / rate of ops) |
+| `disk_io_time_seconds_total` | Counter | Time the device was busy; its rate is the utilisation |
+| `disk_io_time_weighted_seconds_total`, `disk_io_now` | Counter, Gauge | Queue depth |
+| `pressure_stalled_seconds_total`, `pressure_stalled_percent` | Counter, Gauge | PSI: time tasks waited for `resource` (cpu, memory, io), `kind` some/full |
+| `memory_cached_bytes`, `memory_buffers_bytes`, `memory_dirty_bytes`, `memory_writeback_bytes`, `memory_shared_bytes`, `memory_slab_*_bytes`, `memory_committed_bytes`, `memory_commit_limit_bytes` | Gauge | Memory by kind |
+| `memory_major_page_faults_total`, `memory_swap_in_pages_total`, `memory_swap_out_pages_total`, `memory_oom_kills_total` | Counter | Paging and OOM kills |
+| `system_processes{state}` | Gauge | Processes by state: running, sleeping, blocked (I/O), zombie |
+| `system_context_switches_total`, `system_interrupts_total`, `system_forks_total` | Counter | Scheduler activity |
+| `system_open_files`, `system_open_files_limit` | Gauge | File handles vs `fs.file-max` |
+| `network_conntrack_entries`, `network_conntrack_limit` | Gauge | Connection tracking table (full = dropped packets) |
+| `tcp_retransmitted_segments_total`, `tcp_listen_overflows_total`, `tcp_listen_drops_total`, `tcp_established_resets_total`, `tcp_timeouts_total`, `tcp_syncookies_sent_total`, `udp_receive_buffer_errors_total`, … | Counter | TCP/UDP trouble counters |
+| `tcp_connections{state}` | Gauge | TCP sockets by state |
+| `filesystem_readonly{mountpoint,device,fstype}` | Gauge | 1 when remounted read-only (disk errors) |
+| `time_synced`, `time_offset_seconds`, `time_estimated_error_seconds` | Gauge | Clock synchronisation |
+| `systemd_units_failed`, `systemd_unit_failed{unit}`, `systemd_system_degraded` | Gauge | Failed units |
+| `systemd_service_active{unit,state}`, `systemd_service_restarts_total{unit}` | Gauge, Counter | The usual services (web, PHP, databases, mail, Docker, SSH, cron) |
+| `process_group_cpu_percent`, `process_group_memory_bytes`, `process_group_count` | Gauge | Top 10 process names by CPU and by memory (`process`) |
+| `system_updates_pending{kind}`, `system_reboot_required` | Gauge | Every 6 h: pending updates (all / security) via apt or dnf; reboot needed |
+| `tls_certificate_expiry_timestamp_seconds{path,subject,issuer}` | Gauge | Hourly: certbot certificates and those nginx, Apache, Dovecot, Exim, Postfix are configured with |
+
+### Integrations (Linux)
+
+Each integration finds its service and reports `agent_integration_status{integration,instance,status}` (`ok`, `unconfigured` — the service runs but exposes no statistics, `error`). `YOMINS_DISABLE_INTEGRATIONS=true` turns them off.
+
+| Integration | Metrics | What it needs |
+|---|---|---|
+| nginx | `nginx_connections_active`, `nginx_connections{state}`, `nginx_connections_accepted_total`, `nginx_connections_handled_total`, `nginx_requests_total` | `stub_status` at `127.0.0.1:8099/nginx_status` (recommended), `127.0.0.1/nginx_status`, `/stub_status`, or `YOMINS_NGINX_STATUS_URL` |
+| PHP-FPM | `phpfpm_processes{pool,state}`, `phpfpm_listen_queue`, `phpfpm_max_children_reached_total`, `phpfpm_slow_requests_total`, `phpfpm_accepted_connections_total`, … | `pm.status_path` in the pool; the agent reads it over the pool's socket (FastCGI), so it must be allowed to connect (e.g. member of the socket's group) |
+| MySQL / MariaDB | `mysql_up`, `mysql_threads_connected`, `mysql_threads_running`, `mysql_queries_total`, `mysql_commands_total{command}`, `mysql_slow_queries_total`, `mysql_innodb_buffer_pool_*`, `mysql_innodb_row_lock_waits_total`, `mysql_replica_*`, `mysql_database_size_bytes{database}`, … | An account for the agent's OS user over the socket: `CREATE USER 'yomins-agent'@'localhost' IDENTIFIED VIA unix_socket; GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO 'yomins-agent'@'localhost';` — or `YOMINS_MYSQL_DSN` |
+| Mail queue | `mail_queue_messages{mta,queue}` | Exim or Postfix spool (read with `CAP_DAC_READ_SEARCH`) |
+| Local Prometheus | the endpoint's own series, labelled `scrape_target`; `scrape_up` | `YOMINS_SCRAPE_URLS` |
+| Access logs (with logs on) | `http_requests_total{vhost,status_class}`, `http_request_duration_seconds` (histogram), `http_response_bytes_total`, and `log_lines_total{log_source,level}` for every log | nginx/apache access logs with a status (and a request time for the histogram) |
+
 ### Backup
 
 Metrics from the [yomins-backup](yomins-backup) report file (`/var/lib/yomins/backup/last_run.json`). If the file does not exist the collector emits nothing — this is expected on hosts where `yomins-backup` is not installed.
@@ -323,6 +364,14 @@ Parsers set the line's own time, a level (`error`, `warn`, `info`, `debug`) and 
 | `agent_logs_last_delivery_timestamp` | Last delivered batch |
 | `agent_logs_files_watched` | Files followed now |
 
+## Remote configuration
+
+Admins set the agent's configuration in the portal: a profile (e.g. "LAMP server") assigned to the project, with project- and server-level overrides. The agent fetches it every minute (`GET <server>/config`), saves it in `<state-dir>/remote_config.json`, and restarts to apply a new version (at most once per 2 minutes of uptime). At startup the saved configuration is applied over the environment, so it does not depend on the network.
+
+It can set the push interval, disable collectors, switch logs and integrations on or off, add log paths, excludes and redaction patterns, the nginx status URL and scrape URLs, and switch the event collectors. Local lists are extended, not replaced.
+
+`YOMINS_REMOTE_CONFIG` decides how far it is trusted: `full` (default), `limited` (nothing that chooses what is read — log paths, scrape and status URLs) or `off`. The log allow list (`YOMINS_LOG_ALLOW`) applies whatever the server says. `agent_config_info{version,source,mode}` reports what is applied.
+
 ## Dry-run mode
 
 Use `--dry-run` to collect metrics and print them to stdout without sending anything to the server. No `--server` or `--token` is required. This is useful for verifying what the agent collects on a given host.
@@ -400,6 +449,11 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--log-paths` | `YOMINS_LOG_PATHS` | *(none)* | Comma-separated extra log file globs, read with the auto parser as source `custom` |
 | `--log-exclude` | `YOMINS_LOG_EXCLUDE` | *(none)* | Comma-separated globs of log files never to read |
 | `--log-allow` | `YOMINS_LOG_ALLOW` | *(see [Logs](#logs))* | Comma-separated globs logs may be read from; `**` spans directories |
+| `--remote-config` | `YOMINS_REMOTE_CONFIG` | `full` | Trust in the portal's configuration: `full`, `limited`, `off` (see [Remote configuration](#remote-configuration)) |
+| `--disable-integrations` | `YOMINS_DISABLE_INTEGRATIONS` | `false` | Disable the service integrations |
+| `--nginx-status-url` | `YOMINS_NGINX_STATUS_URL` | *(tried at local addresses)* | nginx `stub_status` URL |
+| `--mysql-dsn` | `YOMINS_MYSQL_DSN` | *(local socket, agent's OS user)* | MySQL DSN (go-sql-driver format) |
+| `--scrape-urls` | `YOMINS_SCRAPE_URLS` | *(none)* | Comma-separated local Prometheus endpoints to forward |
 | `--insecure-skip-verify` | — | `false` | Skip TLS verification (**dev only**) |
 | `--dry-run` | — | `false` | Print collected metrics to stdout instead of sending to the server; `--server` and `--token` are not required |
 
