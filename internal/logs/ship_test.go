@@ -81,7 +81,7 @@ func TestShipper_DeliversRedactedLinesInBatches(t *testing.T) {
 	srv := &logServer{}
 	ts := time.Date(2026, 10, 18, 10, 0, 0, 0, time.UTC)
 	shipAll(t, srv, []Entry{
-		{Time: ts, Msg: "login password=hunter2", Source: "app", Level: LevelWarn, Fields: map[string]string{"status": "200", "project_id": "forged"}},
+		{Time: ts, Msg: "login password=hunter2", Source: "app", Level: LevelWarn, Fields: map[string]string{"status": "200", "path": "/login", "project_id": "forged"}},
 		{Msg: "two", Source: "app"},
 		{Msg: "three", Source: "nginx", Path: "/var/log/nginx/a.log"},
 	})
@@ -92,10 +92,13 @@ func TestShipper_DeliversRedactedLinesInBatches(t *testing.T) {
 	if first["_msg"] != "login password=***" || first["level"] != "warn" || first["status"] != "200" || first["_time"] != "2026-10-18T10:00:00Z" {
 		t.Errorf("line = %v", first)
 	}
+	if first["path"] != "/login" {
+		t.Errorf("a parser's URL path must survive, got %q", first["path"])
+	}
 	if _, ok := first["project_id"]; ok {
 		t.Error("a parser field must not set project_id")
 	}
-	if srv.lines[1]["_time"] == "" || srv.lines[2]["path"] != "/var/log/nginx/a.log" {
+	if srv.lines[1]["_time"] == "" || srv.lines[2]["file"] != "/var/log/nginx/a.log" {
 		t.Errorf("lines = %v", srv.lines)
 	}
 	if srv.hdr.Get("X-Yomins-Hostname") != "web-1" || srv.hdr.Get("Content-Type") != ContentType {

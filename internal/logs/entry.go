@@ -12,8 +12,8 @@ import "time"
 type Entry struct {
 	Time   time.Time         `json:"_time"`
 	Msg    string            `json:"_msg"`
-	Source string            `json:"source"` // what produced it: nginx, php-fpm, mysql, syslog…
-	Path   string            `json:"path,omitempty"`
+	Source string            `json:"source"`         // what produced it: nginx, php-fpm, mysql, syslog…
+	Path   string            `json:"file,omitempty"` // the log file; "path" is left to parsers (URL paths)
 	Unit   string            `json:"unit,omitempty"`
 	Level  string            `json:"level,omitempty"`
 	Fields map[string]string `json:"-"` // parser output, flattened into the JSON object

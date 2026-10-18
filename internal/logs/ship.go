@@ -17,7 +17,7 @@ const ContentType = "application/x-ndjson"
 // reservedFields are set by the agent or the server; parser fields with these
 // names are dropped rather than allowed to overwrite them.
 var reservedFields = map[string]bool{
-	"_time": true, "_msg": true, "_stream": true, "source": true, "path": true, "unit": true,
+	"_time": true, "_msg": true, "_stream": true, "source": true, "file": true, "unit": true,
 	"level": true, "host": true, "agent_id": true, "project_id": true, "customer_id": true,
 }
 
@@ -118,7 +118,7 @@ func (s *Shipper) encode(e Entry) ([]byte, error) {
 	obj["_msg"] = s.redact.Redact(e.Msg)
 	obj["source"] = e.Source
 	if e.Path != "" {
-		obj["path"] = e.Path
+		obj["file"] = e.Path
 	}
 	if e.Unit != "" {
 		obj["unit"] = e.Unit
