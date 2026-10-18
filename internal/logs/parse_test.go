@@ -75,9 +75,9 @@ func TestParseNginxError(t *testing.T) {
 func TestParsePHPFPM(t *testing.T) {
 	cases := map[string]string{
 		"[18-Oct-2026 13:00:01] WARNING: [pool www] server reached pm.max_children setting (10)": LevelWarn,
-		"[18-Oct-2026 13:00:01 Europe/Kyiv] PHP Fatal error:  Uncaught Error in /x.php:3":      LevelError,
-		"[18-Oct-2026 13:00:01 UTC] PHP Deprecated:  Function x() is deprecated":               LevelWarn,
-		"[18-Oct-2026 13:00:01] NOTICE: fpm is running, pid 1":                                 LevelInfo,
+		"[18-Oct-2026 13:00:01 Europe/Kyiv] PHP Fatal error:  Uncaught Error in /x.php:3":        LevelError,
+		"[18-Oct-2026 13:00:01 UTC] PHP Deprecated:  Function x() is deprecated":                 LevelWarn,
+		"[18-Oct-2026 13:00:01] NOTICE: fpm is running, pid 1":                                   LevelInfo,
 	}
 	for line, want := range cases {
 		e := parsePHPFPM(line)

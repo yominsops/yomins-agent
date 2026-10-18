@@ -36,14 +36,14 @@ func TestRedact(t *testing.T) {
 
 func TestAllowed(t *testing.T) {
 	cases := map[string]bool{
-		"/var/log/nginx/a.log":                  true,
-		"/var/log/../../etc/shadow":             false,
-		"/etc/shadow":                           false,
-		"/home/kostyuk/logs/wp-cron/x.log":      true,
-		"/home/kostyuk/.ssh/id_rsa":             false,
+		"/var/log/nginx/a.log":                   true,
+		"/var/log/../../etc/shadow":              false,
+		"/etc/shadow":                            false,
+		"/home/kostyuk/logs/wp-cron/x.log":       true,
+		"/home/kostyuk/.ssh/id_rsa":              false,
 		"/var/www/site/storage/logs/laravel.log": true,
-		"/var/lib/mysql/metro.err":              true,
-		"/var/lib/mysql/ibdata1":                false,
+		"/var/lib/mysql/metro.err":               true,
+		"/var/lib/mysql/ibdata1":                 false,
 	}
 	for p, want := range cases {
 		if got := Allowed(p, DefaultAllow); got != want {
