@@ -83,7 +83,17 @@ func dtoMetric(pt MetricPoint, agentLabels []*dto.LabelPair) *dto.Metric {
 	}
 	sort.Strings(pointLabelKeys)
 	for _, k := range pointLabelKeys {
-		labels = append(labels, labelPair(k, pt.Labels[k]))
+		name := k
+		// A point label named like an agent label would make the series
+		// unparsable (duplicate label names) and the server would refuse the
+		// whole push; it is kept under another name instead.
+		for _, al := range agentLabels {
+			if al.GetName() == k {
+				name = "exported_" + k
+				break
+			}
+		}
+		labels = append(labels, labelPair(name, pt.Labels[k]))
 	}
 
 	m := &dto.Metric{Label: labels}

@@ -370,7 +370,7 @@ Admins set the agent's configuration in the portal: a profile (e.g. "LAMP server
 
 It can set the push interval, disable collectors, switch logs and integrations on or off, add log paths, excludes and redaction patterns, the nginx status URL and scrape URLs, and switch the event collectors. Local lists are extended, not replaced.
 
-`YOMINS_REMOTE_CONFIG` decides how far it is trusted: `full` (default), `limited` (nothing that chooses what is read — log paths, scrape and status URLs) or `off`. The log allow list (`YOMINS_LOG_ALLOW`) applies whatever the server says. `agent_config_info{version,source,mode}` reports what is applied.
+`YOMINS_REMOTE_CONFIG` decides how far it is trusted: `full` (default), `limited` (nothing that chooses what is read — log paths, scrape and status URLs) or `off`. The log allow list (`YOMINS_LOG_ALLOW`) applies whatever the server says. `agent_config_info{version,config_source,mode}` reports what is applied.
 
 ## Dry-run mode
 

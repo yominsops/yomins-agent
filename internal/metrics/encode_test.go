@@ -170,3 +170,20 @@ func assertNoLabel(t *testing.T, m *dto.Metric, name string) {
 		}
 	}
 }
+
+func TestEncode_PointLabelClashingWithAgentLabelIsRenamed(t *testing.T) {
+	b, err := metrics.Encode(metrics.MetricSet{AgentID: "a", Hostname: "h", Source: "yomins_agent",
+		Points: []metrics.MetricPoint{{Name: "x", Type: metrics.Gauge, Value: 1, Labels: map[string]string{"source": "remote", "hostname": "other"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(b)
+	for _, want := range []string{`source="yomins_agent"`, `exported_source="remote"`, `hostname="h"`, `exported_hostname="other"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s in %s", want, out)
+		}
+	}
+	if _, err := new(expfmt.TextParser).TextToMetricFamilies(strings.NewReader(out)); err != nil {
+		t.Errorf("not parsable: %v", err)
+	}
+}

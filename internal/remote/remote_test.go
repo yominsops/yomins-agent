@@ -162,11 +162,11 @@ func TestFetcherRun_RestartsAfterMinUptime(t *testing.T) {
 
 func TestInfoCollector(t *testing.T) {
 	pts, _ := InfoCollector{Version: "abc", Mode: ModeFull}.Collect(context.Background())
-	if pts[0].Labels["source"] != "remote" || pts[0].Labels["version"] != "abc" {
+	if pts[0].Labels["config_source"] != "remote" || pts[0].Labels["version"] != "abc" {
 		t.Errorf("%v", pts)
 	}
 	pts, _ = InfoCollector{Mode: ModeFull}.Collect(context.Background())
-	if pts[0].Labels["source"] != "local" {
+	if pts[0].Labels["config_source"] != "local" {
 		t.Error("no remote version: local")
 	}
 }

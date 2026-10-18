@@ -129,5 +129,5 @@ func (c InfoCollector) Collect(context.Context) ([]metrics.MetricPoint, error) {
 		source = "remote"
 	}
 	return []metrics.MetricPoint{{Name: "agent_config_info", Help: "Always 1; the configuration the agent applies (version of the remote one, source, trust mode)",
-		Type: metrics.Gauge, Value: 1, Labels: map[string]string{"version": c.Version, "source": source, "mode": c.Mode}}}, nil
+		Type: metrics.Gauge, Value: 1, Labels: map[string]string{"version": c.Version, "config_source": source, "mode": c.Mode}}}, nil
 }
