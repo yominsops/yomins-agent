@@ -53,7 +53,10 @@ var knownLogs = []FileSpec{
 // (read with the auto parser as source "custom") and minus exclude globs.
 func Discover(extra, exclude []string) Plan {
 	var plan Plan
+	// Per-facility files rsyslog also writes into /var/log/syslog are copies.
+	copies := syslogCopies(rsyslogConfs())
 	for _, spec := range knownLogs {
+		spec.Globs = withoutCopies(spec.Globs, copies)
 		if anyMatch(spec.Globs) {
 			spec.Exclude = exclude
 			plan.Files = append(plan.Files, spec)
@@ -65,6 +68,16 @@ func Discover(extra, exclude []string) Plan {
 	// Without a syslog daemon the journal is the only place system logs live.
 	plan.Journal = !exists("/var/log/syslog") && !exists("/var/log/messages") && exists("/run/systemd/journal")
 	return plan
+}
+
+func withoutCopies(globs []string, copies map[string]bool) []string {
+	out := make([]string, 0, len(globs))
+	for _, g := range globs {
+		if !copies[g] {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 func anyMatch(globs []string) bool {
