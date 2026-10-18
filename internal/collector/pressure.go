@@ -17,7 +17,9 @@ type PressureCollector struct {
 }
 
 // NewPressureCollector creates the collector.
-func NewPressureCollector(paths HostPaths) *PressureCollector { return &PressureCollector{paths: paths} }
+func NewPressureCollector(paths HostPaths) *PressureCollector {
+	return &PressureCollector{paths: paths}
+}
 
 func (c *PressureCollector) Name() string { return "pressure" }
 

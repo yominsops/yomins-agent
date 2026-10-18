@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"runtime"
 	"strings"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 	"github.com/yominsops/yomins-agent/internal/collector"
 	"github.com/yominsops/yomins-agent/internal/config"
 	"github.com/yominsops/yomins-agent/internal/identity"
+	"github.com/yominsops/yomins-agent/internal/integrations"
 	"github.com/yominsops/yomins-agent/internal/transport"
 	"github.com/yominsops/yomins-agent/internal/upgrade"
 	"github.com/yominsops/yomins-agent/internal/version"
@@ -166,6 +168,17 @@ func buildCollectors(cfg *config.Config) []collector.Collector {
 			collector.Every(time.Hour, collector.NewCertsCollector(paths, nil)),
 		)
 	}
+	if !cfg.DisableIntegrations && runtime.GOOS == "linux" {
+		collectors = append(collectors,
+			integrations.NewNginx(cfg.NginxStatusURL),
+			integrations.NewPHPFPM(),
+			integrations.NewMySQL(cfg.MySQLDSN, currentUser()),
+			integrations.NewMailQueue("/"),
+		)
+	}
+	if len(cfg.ScrapeURLs) > 0 {
+		collectors = append(collectors, integrations.NewScrape(cfg.ScrapeURLs))
+	}
 	if !cfg.DisableFilesystems {
 		if len(cfg.ExcludeMountpoints) > 0 {
 			collectors = append(collectors, collector.NewDiskCollectorWithFilters(cfg.ExcludeMountpoints))
@@ -242,6 +255,14 @@ func runUninstall() error {
 
 	fmt.Println("\nYomins agent removed.")
 	return nil
+}
+
+// currentUser is the OS user the agent runs as (the MySQL socket login).
+func currentUser() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return "yomins-agent"
 }
 
 // resolveHostname returns the effective hostname from config or os.Hostname.

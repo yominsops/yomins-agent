@@ -117,15 +117,15 @@ type fakeProcs struct{ samples []procfs.Sample }
 
 func (f *fakeProcs) List(context.Context) ([]procfs.Sample, error) { return f.samples, nil }
 func (f *fakeProcs) Details(int32) (string, string)                { return "", "" }
-func (f *fakeProcs) MemTotal() uint64                               { return 0 }
-func (f *fakeProcs) ClockTicks() float64                            { return 100 }
+func (f *fakeProcs) MemTotal() uint64                              { return 0 }
+func (f *fakeProcs) ClockTicks() float64                           { return 100 }
 
 func TestKernel(t *testing.T) {
 	h := fixture(t, map[string]string{
-		"proc/meminfo":                             "MemTotal: 100 kB\nCached:  2048 kB\nDirty: 4 kB\n",
-		"proc/vmstat":                              "pgmajfault 12\noom_kill 3\nnr_free_pages 1\n",
-		"proc/stat":                                "cpu 1 2 3\nctxt 999\nprocesses 77\n",
-		"proc/sys/fs/file-nr":                      "1024\t0\t65536\n",
+		"proc/meminfo":        "MemTotal: 100 kB\nCached:  2048 kB\nDirty: 4 kB\n",
+		"proc/vmstat":         "pgmajfault 12\noom_kill 3\nnr_free_pages 1\n",
+		"proc/stat":           "cpu 1 2 3\nctxt 999\nprocesses 77\n",
+		"proc/sys/fs/file-nr": "1024\t0\t65536\n",
 		"proc/sys/net/netfilter/nf_conntrack_count": "300\n",
 		"proc/sys/net/netfilter/nf_conntrack_max":   "262144\n",
 	})

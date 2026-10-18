@@ -54,3 +54,47 @@ func TestPositions_SaveLoadAndCorruptFile(t *testing.T) {
 		t.Error("a corrupt file must start empty")
 	}
 }
+
+func TestLineMetrics(t *testing.T) {
+	s := NewStats()
+	for _, e := range []Entry{
+		{Source: "nginx", Level: LevelInfo, Path: "/var/log/nginx/metro.dp.ua.access.log", Fields: map[string]string{"status": "200", "bytes": "100", "request_time": "0.07"}},
+		{Source: "nginx", Level: LevelError, Path: "/var/log/nginx/metro.dp.ua.access.log", Fields: map[string]string{"status": "502", "bytes": "10", "request_time": "3"}},
+		{Source: "nginx", Fields: map[string]string{"status": "200", "vhost": "api.example"}},
+		{Source: "syslog", Level: LevelError},
+	} {
+		s.observe(e)
+	}
+	pts, _ := s.Collect(context.Background())
+	got := map[string]float64{}
+	for _, p := range pts {
+		got[p.Name+"|"+p.Labels["vhost"]+"|"+p.Labels["status_class"]+"|"+p.Labels["le"]+"|"+p.Labels["log_source"]+"|"+p.Labels["level"]] = p.Value
+	}
+	want := map[string]float64{
+		"http_requests_total|metro.dp.ua|2xx|||":                  1,
+		"http_requests_total|metro.dp.ua|5xx|||":                  1,
+		"http_requests_total|api.example|2xx|||":                  1,
+		"http_response_bytes_total|metro.dp.ua||||":               110,
+		"http_request_duration_seconds_bucket|metro.dp.ua||0.1||": 1,
+		"http_request_duration_seconds_bucket|metro.dp.ua||5||":   2,
+		"http_request_duration_seconds_count|metro.dp.ua||||":     2,
+		"log_lines_total||||syslog|error":                         1,
+		"log_lines_total||||nginx|none":                           1,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
+	}
+}
+
+func TestVhostFromFile(t *testing.T) {
+	for in, want := range map[string]string{
+		"/var/log/nginx/metro.dp.ua.access.log": "metro.dp.ua", "/var/log/nginx/access.log": "default",
+		"/var/log/nginx/prom_shop.example.access.log": "shop.example", "/var/log/apache2/site-access.log": "site",
+	} {
+		if got := vhostFromFile(in); got != want {
+			t.Errorf("%s → %s, want %s", in, got, want)
+		}
+	}
+}

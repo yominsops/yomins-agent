@@ -61,6 +61,12 @@ type Config struct {
 	LogPaths   []string // --log-paths / YOMINS_LOG_PATHS: extra globs to read
 	LogExclude []string // --log-exclude / YOMINS_LOG_EXCLUDE: globs never read
 	LogAllow   []string // --log-allow / YOMINS_LOG_ALLOW: the only places logs may be read from
+
+	// Integrations
+	DisableIntegrations bool     // --disable-integrations / YOMINS_DISABLE_INTEGRATIONS
+	NginxStatusURL      string   // --nginx-status-url / YOMINS_NGINX_STATUS_URL
+	MySQLDSN            string   // --mysql-dsn / YOMINS_MYSQL_DSN
+	ScrapeURLs          []string // --scrape-urls / YOMINS_SCRAPE_URLS
 }
 
 // Load parses configuration from CLI flags and environment variables.
@@ -132,6 +138,13 @@ func Load() (*Config, error) {
 	fs.StringVar(&logExcludeRaw, "log-exclude", "", "Comma-separated globs of log files never to read (YOMINS_LOG_EXCLUDE)")
 	fs.StringVar(&logAllowRaw, "log-allow", "", "Comma-separated globs logs may be read from; ** spans directories (YOMINS_LOG_ALLOW; default: /var/log/** and common app log dirs)")
 
+	// Integration flags
+	var scrapeURLsRaw string
+	fs.BoolVar(&cfg.DisableIntegrations, "disable-integrations", false, "Disable service integrations: nginx, PHP-FPM, MySQL, mail queue (YOMINS_DISABLE_INTEGRATIONS)")
+	fs.StringVar(&cfg.NginxStatusURL, "nginx-status-url", "", "nginx stub_status URL; default: tried at the usual local addresses (YOMINS_NGINX_STATUS_URL)")
+	fs.StringVar(&cfg.MySQLDSN, "mysql-dsn", "", "MySQL DSN; default: the local socket as the agent's OS user (YOMINS_MYSQL_DSN)")
+	fs.StringVar(&scrapeURLsRaw, "scrape-urls", "", "Comma-separated local Prometheus endpoints to forward (YOMINS_SCRAPE_URLS)")
+
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return nil, fmt.Errorf("parse flags: %w", err)
 	}
@@ -184,6 +197,12 @@ func Load() (*Config, error) {
 			}
 		}
 	}
+	if !explicitFlags["scrape-urls"] {
+		if v := os.Getenv("YOMINS_SCRAPE_URLS"); v != "" {
+			scrapeURLsRaw = v
+		}
+	}
+	cfg.ScrapeURLs = parseCSV(scrapeURLsRaw)
 	cfg.LogPaths = parseCSV(logPathsRaw)
 	cfg.LogExclude = parseCSV(logExcludeRaw)
 	cfg.LogAllow = parseCSV(logAllowRaw)
@@ -290,6 +309,21 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 	if !explicit["monitor-process-lifecycle"] {
 		if v := os.Getenv("YOMINS_MONITOR_PROCESS_LIFECYCLE"); isTruthy(v) {
 			cfg.MonitorProcessLifecycle = true
+		}
+	}
+	if !explicit["disable-integrations"] {
+		if v := os.Getenv("YOMINS_DISABLE_INTEGRATIONS"); isTruthy(v) {
+			cfg.DisableIntegrations = true
+		}
+	}
+	if !explicit["nginx-status-url"] {
+		if v := os.Getenv("YOMINS_NGINX_STATUS_URL"); v != "" {
+			cfg.NginxStatusURL = v
+		}
+	}
+	if !explicit["mysql-dsn"] {
+		if v := os.Getenv("YOMINS_MYSQL_DSN"); v != "" {
+			cfg.MySQLDSN = v
 		}
 	}
 	if !explicit["logs"] {

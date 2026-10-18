@@ -77,6 +77,7 @@ func (s *Shipper) Run(ctx context.Context, in <-chan Entry) {
 		case <-ctx.Done():
 			return
 		case e := <-in:
+			s.stats.observe(e)
 			line, err := s.encode(e)
 			if err != nil {
 				s.stats.dropped("encode")

@@ -18,11 +18,12 @@ type Stats struct {
 	retries  float64
 	lastShip time.Time
 	watchers []func() int
+	derived  *lineMetrics
 }
 
 // NewStats returns empty counters.
 func NewStats() *Stats {
-	return &Stats{lines: map[string]float64{}, drops: map[string]float64{}}
+	return &Stats{lines: map[string]float64{}, drops: map[string]float64{}, derived: newLineMetrics()}
 }
 
 // Watch registers a function reporting how many files are followed.
@@ -41,6 +42,9 @@ func (s *Stats) shipped(batch []Entry, n int) {
 	s.bytes += float64(n)
 	s.lastShip = time.Now()
 }
+
+// observe feeds a line read by a source into the derived metrics.
+func (s *Stats) observe(e Entry) { s.derived.observe(e) }
 
 func (s *Stats) dropped(reason string) { s.droppedN(reason, 1) }
 
@@ -84,6 +88,7 @@ func (s *Stats) Collect(context.Context) ([]metrics.MetricPoint, error) {
 	for _, f := range s.watchers {
 		watched += f()
 	}
+	pts = append(pts, s.derived.points()...)
 	pts = append(pts, metrics.MetricPoint{Name: "agent_logs_files_watched", Help: "Log files followed now", Type: metrics.Gauge, Value: float64(watched)})
 	return pts, nil
 }
