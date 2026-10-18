@@ -32,7 +32,8 @@ StateDirectoryMode=0700
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+# read-only, not true: application logs often live under /home/*/logs.
+ProtectHome=read-only
 ReadOnlyPaths=/
 ReadWritePaths=/var/lib/yomins/agent
 
@@ -44,9 +45,13 @@ RestartSec=10s
 # Give the agent time to flush on shutdown.
 TimeoutStopSec=15s
 
-# Require for access to the /dev/kmsg
-AmbientCapabilities=CAP_SYSLOG
-CapabilityBoundingSet=CAP_SYSLOG
+# CAP_SYSLOG: read /dev/kmsg (OOM kills).
+# CAP_DAC_READ_SEARCH: read log files whatever their owner and mode (many are
+# root:root 0600, Docker's are under a root-only directory). It grants
+# reading only, never writing; the agent itself reads logs only inside its
+# allow list (YOMINS_LOG_ALLOW, default /var/log/** and app log dirs).
+AmbientCapabilities=CAP_SYSLOG CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYSLOG CAP_DAC_READ_SEARCH
 # Required for reading from journald
 SupplementaryGroups=systemd-journal adm shadow
 

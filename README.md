@@ -1,6 +1,6 @@
-# Yomins Metrics Agent
+# Yomins Agent
 
-A lightweight Go agent that collects host-level system metrics and security events, then pushes them to the Yomins monitoring stack. The agent requires no inbound ports and no SSH access — it pushes outbound over HTTPS.
+A lightweight Go agent that collects host-level system metrics, security events and logs, then pushes them to the Yomins monitoring stack. The agent requires no inbound ports and no SSH access — it pushes outbound over HTTPS.
 
 ## How it works
 
@@ -283,6 +283,46 @@ docker run -d \
 | User created/deleted | `-v /etc/passwd:/etc/passwd:ro` | Monitors container's passwd (not host); no error |
 | Config file monitoring | `-v /etc/passwd:…:ro`, `-v /etc/shadow:…:ro`, `-v /etc/group:…:ro`, `-v /etc/sudoers:…:ro`, `-v /etc/ssh/sshd_config:…:ro` | Monitors container's files; `/etc/sudoers` silently skipped if absent |
 
+## Logs
+
+Off by default. With `YOMINS_LOGS=auto` the agent finds the logs of the software on the host and ships them to the ingest server (`/v1/push/logs`), where they are stored per project and searched from the portal.
+
+**What is collected.** Discovery looks for the usual files and uses each group only if it exists on the host:
+
+| Source | Files | Parser |
+|---|---|---|
+| `syslog`, `auth`, `kernel`, `cron` | `/var/log/syslog`, `messages`, `auth.log`, `secure`, `kern.log`, `cron.log` | syslog |
+| `packages` | `dpkg.log`, `apt/history.log`, `dnf.log`, `yum.log`, unattended-upgrades | plain |
+| `nginx` | `/var/log/nginx/*access*.log`, `*analytics*.log`, `*error*.log` | nginx access (combined, JSON, yomins `full`) / error |
+| `apache` | `/var/log/apache2/*`, `/var/log/httpd/*` | combined / plain |
+| `php-fpm` | `/var/log/php*-fpm.log`, `/var/log/php-fpm*/` | PHP |
+| `mysql` | `/var/log/mysql/`, `/var/log/mariadb/`, `/var/lib/mysql/*.err`, slow logs | MySQL |
+| `postgresql`, `redis`, `mongodb` | their `/var/log/<name>/` | auto / plain / JSON |
+| `mail`, `exim`, `dovecot` | `mail.log`, `maillog`, `exim4/*log`, `dovecot*.log` | syslog / plain |
+| `ftp`, `fail2ban`, `clamav` | `vsftpd.log`, `xferlog`, `fail2ban.log`, `clamav/` | plain |
+| `docker` | `/var/lib/docker/containers/*/*-json.log` | Docker json-file |
+| `app` | `/home/*/logs/`, `/var/www/*/logs/`, `/var/log/yomins/` | auto (JSON, syslog or plain) |
+| `journal` | the systemd journal, only when no `/var/log/syslog` or `/var/log/messages` exists | journal |
+
+Parsers set the line's own time, a level (`error`, `warn`, `info`, `debug`) and a few fields (status, path, vhost, program…).
+
+**Delivery.** Files are followed like `tail -F`: rotation and truncation are handled. A file's position is saved only after its lines were delivered (`<state-dir>/log_positions.json`), so the files themselves are the buffer: during an outage reading pauses, and nothing is lost on restart. What a file holds when the agent first sees it is not shipped. Batches are gzip-compressed NDJSON, retried until delivered.
+
+**Secrets.** Before sending, the agent masks `password=`/`token=`/`api_key`-style pairs, `Authorization` headers, credentials in URLs and card numbers (Luhn-checked).
+
+**Where it may read.** Only paths matching `YOMINS_LOG_ALLOW` (default: `/var/log/**`, `/home/*/logs/**`, `/home/*/log/**`, `/var/www/**/logs/**`, `/var/www/**/*.log`, `/srv/**/*.log`, `/opt/**/*.log`, Docker container logs, `/var/lib/mysql/*.err` and slow logs). Nothing outside it is read, whatever configuration asks for it.
+
+**Permissions.** Many logs are `root:root 0600`. The service unit grants `CAP_DAC_READ_SEARCH` (read any file, never write) and mounts `/home` read-only. Self-upgrade replaces only the binary, so on hosts installed before logs existed re-run the installer once to get the new unit.
+
+| Metric | Description |
+|---|---|
+| `agent_logs_lines_total{log_source}` | Lines delivered |
+| `agent_logs_bytes_total` | Bytes delivered (before compression) |
+| `agent_logs_dropped_total{reason}` | Lines dropped (`refused` by the server, `encode`) |
+| `agent_logs_retries_total` | Failed delivery attempts |
+| `agent_logs_last_delivery_timestamp` | Last delivered batch |
+| `agent_logs_files_watched` | Files followed now |
+
 ## Dry-run mode
 
 Use `--dry-run` to collect metrics and print them to stdout without sending anything to the server. No `--server` or `--token` is required. This is useful for verifying what the agent collects on a given host.
@@ -356,6 +396,10 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--ignore-private-ip` | `YOMINS_IGNORE_PRIVATE_IP` | `true` | Ignore loopback and RFC-1918 addresses when tracking `auth.login_new_ip` |
 | `--event-flush-interval` | `YOMINS_EVENT_FLUSH_INTERVAL` | `10s` | How often to flush buffered events to the server |
 | `--event-batch-size` | `YOMINS_EVENT_BATCH_SIZE` | `200` | Maximum number of events per HTTP request |
+| `--logs` | `YOMINS_LOGS` | `off` | Log collection: `off` or `auto` (see [Logs](#logs)) |
+| `--log-paths` | `YOMINS_LOG_PATHS` | *(none)* | Comma-separated extra log file globs, read with the auto parser as source `custom` |
+| `--log-exclude` | `YOMINS_LOG_EXCLUDE` | *(none)* | Comma-separated globs of log files never to read |
+| `--log-allow` | `YOMINS_LOG_ALLOW` | *(see [Logs](#logs))* | Comma-separated globs logs may be read from; `**` spans directories |
 | `--insecure-skip-verify` | — | `false` | Skip TLS verification (**dev only**) |
 | `--dry-run` | — | `false` | Print collected metrics to stdout instead of sending to the server; `--server` and `--token` are not required |
 
@@ -377,6 +421,8 @@ On first start the agent generates a UUID (`agent_id`) and persists it to `$stat
 - Format: Prometheus text exposition format v0.0.4.
 - Retries: exponential backoff starting at 1 s, capped at 60 s, with a total budget of 90% of the collection interval (prevents retry bleed into the next tick).
 - Permanent errors (HTTP 4xx except 429) are not retried.
+- 401/403 pause every push (metrics, events, logs) for the server's `Retry-After`, or for 1 min doubling up to 30 min, and are logged once with the server's reason. Events wait in the buffer meanwhile.
+- Bodies are gzip-compressed once the server announces support (`X-Yomins-Accept-Encoding`).
 - Push failures are logged and counted in `agent_push_error_total` but do not crash the agent.
 - On `SIGTERM`/`SIGINT` the agent performs one final collection and push (10 s budget) before exiting, ensuring no metric gap on planned restarts or upgrades.
 
