@@ -51,7 +51,7 @@ func TestNginx(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		io.WriteString(w, "Active connections: 291 \nserver accepts handled requests\n 16630948 16630948 31070465 \nReading: 6 Writing: 179 Waiting: 106 \n")
+		_, _ = io.WriteString(w, "Active connections: 291 \nserver accepts handled requests\n 16630948 16630948 31070465 \nReading: 6 Writing: 179 Waiting: 106 \n")
 	}))
 	defer srv.Close()
 
@@ -111,7 +111,7 @@ func fakeFPM(t *testing.T, sock string, head, body string) {
 				var out bytes.Buffer
 				fcgiRecord(&out, fcgiStdout, []byte(head+"\r\n\r\n"+body))
 				fcgiRecord(&out, fcgiEndRequest, make([]byte, 8))
-				c.Write(out.Bytes())
+				_, _ = c.Write(out.Bytes())
 			}(conn)
 		}
 	}()
@@ -122,8 +122,8 @@ func TestPHPFPM(t *testing.T) {
 	sock := filepath.Join(dir, "fpm.sock")
 	fakeFPM(t, sock, "Content-type: application/json", `{"pool":"www","accepted conn":120,"listen queue":3,"max listen queue":9,"idle processes":4,"active processes":6,"max active processes":10,"max children reached":2,"slow requests":5}`)
 	conf := filepath.Join(dir, "php", "8.3", "fpm", "pool.d", "www.conf")
-	os.MkdirAll(filepath.Dir(conf), 0o755)
-	os.WriteFile(conf, []byte("[www]\nlisten = "+sock+"\n;pm.status_path = /old\npm.status_path = /fpm-status\n\n[other]\nlisten = 127.0.0.1:9001\n"), 0o644)
+	must(t, os.MkdirAll(filepath.Dir(conf), 0o755))
+	must(t, os.WriteFile(conf, []byte("[www]\nlisten = "+sock+"\n;pm.status_path = /old\npm.status_path = /fpm-status\n\n[other]\nlisten = 127.0.0.1:9001\n"), 0o644))
 
 	p := NewPHPFPM()
 	p.globs = []string{filepath.Join(dir, "php", "*", "fpm", "pool.d", "*.conf")}
@@ -155,11 +155,11 @@ func TestMailQueue(t *testing.T) {
 	root := t.TempDir()
 	for _, f := range []string{"var/spool/exim4/input/A/1abc-000001-H", "var/spool/exim4/input/A/1abc-000001-D", "var/spool/exim4/input/1xyz-000002-H",
 		"var/spool/postfix/deferred/4/ABC123", "var/spool/postfix/active/DEF"} {
-		os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755)
-		os.WriteFile(filepath.Join(root, f), nil, 0o600)
+		must(t, os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755))
+		must(t, os.WriteFile(filepath.Join(root, f), nil, 0o600))
 	}
-	os.MkdirAll(filepath.Join(root, "var/spool/postfix/incoming"), 0o755)
-	os.MkdirAll(filepath.Join(root, "var/spool/postfix/hold"), 0o755)
+	must(t, os.MkdirAll(filepath.Join(root, "var/spool/postfix/incoming"), 0o755))
+	must(t, os.MkdirAll(filepath.Join(root, "var/spool/postfix/hold"), 0o755))
 	pts, _ := NewMailQueue(root).Collect(context.Background())
 	if val(t, pts, "mail_queue_messages", "mta", "exim") != 2 || val(t, pts, "mail_queue_messages", "mta", "postfix", "queue", "deferred") != 1 {
 		t.Errorf("%v", pts)
@@ -168,7 +168,7 @@ func TestMailQueue(t *testing.T) {
 
 func TestScrape(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `# TYPE app_requests_total counter
+		_, _ = io.WriteString(w, `# TYPE app_requests_total counter
 app_requests_total{code="200",hostname="x"} 10
 # TYPE app_latency histogram
 app_latency_bucket{le="0.1"} 3
@@ -209,7 +209,7 @@ func TestMySQL_NotInstalled(t *testing.T) {
 
 func TestMySQL_UnreachableIsError(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "mysqld.sock")
-	os.WriteFile(sock, nil, 0o600) // exists but nobody listens
+	must(t, os.WriteFile(sock, nil, 0o600)) // exists but nobody listens
 	m := NewMySQL("", "yomins-agent")
 	m.sockets = []string{sock}
 	pts, _ := m.Collect(context.Background())
@@ -221,8 +221,8 @@ func TestMySQL_UnreachableIsError(t *testing.T) {
 func TestMySQLDirSizes(t *testing.T) {
 	dir := t.TempDir()
 	write := func(p string, n int) {
-		os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o755)
-		os.WriteFile(filepath.Join(dir, p), make([]byte, n), 0o600)
+		must(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o755))
+		must(t, os.WriteFile(filepath.Join(dir, p), make([]byte, n), 0o600))
 	}
 	write("shop/orders.ibd", 3000)
 	write("shop/users.ibd", 1000)
@@ -236,5 +236,12 @@ func TestMySQLDirSizes(t *testing.T) {
 	}
 	if pts[0].Labels["database"] != "shop" {
 		t.Error("largest first")
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -321,14 +321,14 @@ func TestEvery(t *testing.T) {
 	at := time.Unix(0, 0)
 	e := Every(time.Hour, inner).(*everyCollector)
 	e.now = func() time.Time { return at }
-	e.Collect(context.Background())
+	_, _ = e.Collect(context.Background())
 	at = at.Add(30 * time.Minute)
 	pts, _ := e.Collect(context.Background())
 	if inner.n != 1 || pts[0].Value != 1 {
 		t.Error("cached within the ttl")
 	}
 	at = at.Add(31 * time.Minute)
-	e.Collect(context.Background())
+	_, _ = e.Collect(context.Background())
 	if inner.n != 2 {
 		t.Error("run again after the ttl")
 	}
