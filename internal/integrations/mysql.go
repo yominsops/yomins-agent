@@ -3,7 +3,10 @@ package integrations
 import (
 	"context"
 	"database/sql"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,9 +29,11 @@ var DefaultMySQLSockets = []string{"/run/mysqld/mysqld.sock", "/var/run/mysqld/m
 // socket and allowed to read status, e.g. on MariaDB:
 //
 //	CREATE USER 'yomins-agent'@'localhost' IDENTIFIED VIA unix_socket;
-//	GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO 'yomins-agent'@'localhost';
+//	GRANT SLAVE MONITOR ON *.* TO 'yomins-agent'@'localhost'; -- MySQL: REPLICATION CLIENT
 //
-// No password is stored anywhere.
+// The account reads no data: status and variables need no grant, the grant
+// is for replication status, and database sizes come from the data
+// directory. No password is stored anywhere.
 type MySQL struct {
 	dsn     string
 	user    string
@@ -203,30 +208,74 @@ func (m *MySQL) replication(ctx context.Context, db *sql.DB) []metrics.MetricPoi
 	return pts
 }
 
-// databaseSizes reports the 20 largest databases, hourly (information_schema is slow on big servers).
+// databaseSizes reports the 20 largest databases, hourly, from the size of
+// their directories in the data directory: information_schema would need
+// a grant on the tables themselves, i.e. on the data.
 func (m *MySQL) databaseSizes(ctx context.Context, db *sql.DB) []metrics.MetricPoint {
 	if !m.sizesAt.IsZero() && time.Since(m.sizesAt) < m.sizeEvery {
 		return m.sizes
 	}
 	m.sizesAt = time.Now()
-	rows, err := db.QueryContext(ctx, `SELECT table_schema, SUM(data_length + index_length) FROM information_schema.tables
-		WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys')
-		GROUP BY table_schema ORDER BY 2 DESC LIMIT 20`)
-	if err != nil {
+	var datadir string
+	if err := db.QueryRowContext(ctx, "SELECT @@datadir").Scan(&datadir); err != nil || datadir == "" {
 		m.sizes = nil
 		return nil
 	}
-	defer rows.Close()
-	var pts []metrics.MetricPoint
-	for rows.Next() {
-		var schema string
-		var size sql.NullFloat64
-		if rows.Scan(&schema, &size) == nil {
-			pts = append(pts, gauge("mysql_database_size_bytes", "Data and index size of a database", size.Float64, map[string]string{"database": schema}))
-		}
+	m.sizes = dirSizes(datadir, 20)
+	return m.sizes
+}
+
+// systemSchemas are left out of the database sizes.
+var systemSchemas = map[string]bool{"mysql": true, "performance_schema": true, "sys": true, "information_schema": true}
+
+func dirSizes(datadir string, top int) []metrics.MetricPoint {
+	entries, err := os.ReadDir(datadir)
+	if err != nil {
+		return nil
 	}
-	m.sizes = pts
+	type sized struct {
+		name string
+		size int64
+	}
+	var all []sized
+	for _, e := range entries {
+		if !e.IsDir() || systemSchemas[e.Name()] || strings.HasPrefix(e.Name(), "#") || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		var total int64
+		_ = filepath.WalkDir(filepath.Join(datadir, e.Name()), func(_ string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() {
+				if fi, err := d.Info(); err == nil {
+					total += fi.Size()
+				}
+			}
+			return nil
+		})
+		// Directory names encode special characters (@002d for "-").
+		all = append(all, sized{decodeSchemaName(e.Name()), total})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].size > all[j].size })
+	var pts []metrics.MetricPoint
+	for _, s := range all[:min(top, len(all))] {
+		pts = append(pts, gauge("mysql_database_size_bytes", "Size of a database's files in the data directory", float64(s.size), map[string]string{"database": s.name}))
+	}
 	return pts
+}
+
+// decodeSchemaName turns MySQL's file name encoding (@002d) back into characters.
+func decodeSchemaName(n string) string {
+	var b strings.Builder
+	for i := 0; i < len(n); i++ {
+		if n[i] == '@' && i+4 < len(n) {
+			if v, err := strconv.ParseUint(n[i+1:i+5], 16, 32); err == nil {
+				b.WriteRune(rune(v))
+				i += 4
+				continue
+			}
+		}
+		b.WriteByte(n[i])
+	}
+	return b.String()
 }
 
 func asMySQLError(err error, target **mysql.MySQLError) bool {

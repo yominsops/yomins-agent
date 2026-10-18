@@ -217,3 +217,24 @@ func TestMySQL_UnreachableIsError(t *testing.T) {
 		t.Errorf("%v", pts)
 	}
 }
+
+func TestMySQLDirSizes(t *testing.T) {
+	dir := t.TempDir()
+	write := func(p string, n int) {
+		os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o755)
+		os.WriteFile(filepath.Join(dir, p), make([]byte, n), 0o600)
+	}
+	write("shop/orders.ibd", 3000)
+	write("shop/users.ibd", 1000)
+	write("blog@002dold/posts.ibd", 500)
+	write("mysql/user.MAD", 9999)
+	write("#innodb_temp/t.ibt", 9999)
+	write("ibdata1", 9999)
+	pts := dirSizes(dir, 20)
+	if len(pts) != 2 || val(t, pts, "mysql_database_size_bytes", "database", "shop") != 4000 || val(t, pts, "mysql_database_size_bytes", "database", "blog-old") != 500 {
+		t.Errorf("%v", pts)
+	}
+	if pts[0].Labels["database"] != "shop" {
+		t.Error("largest first")
+	}
+}
