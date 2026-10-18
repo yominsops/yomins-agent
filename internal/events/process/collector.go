@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/yominsops/yomins-agent/internal/events"
+	"github.com/yominsops/yomins-agent/internal/procfs"
 )
 
 // DefaultSuspiciousPatterns is the built-in list of suspicious command-line patterns.
@@ -54,10 +55,10 @@ type Config struct {
 // Collector watches for new/exited processes and detects resource anomalies
 // and suspicious command lines.
 type Collector struct {
-	cfg             Config
-	patterns        []*regexp.Regexp // suspicious patterns (process.suspicious)
-	reverseShells   []*regexp.Regexp // reverse-shell patterns (process.reverse_shell)
-	source          procSource
+	cfg           Config
+	patterns      []*regexp.Regexp // suspicious patterns (process.suspicious)
+	reverseShells []*regexp.Regexp // reverse-shell patterns (process.reverse_shell)
+	source        procfs.Source
 
 	mu    sync.Mutex
 	procs map[int32]*ProcessSnapshot // PID → snapshot
@@ -65,12 +66,12 @@ type Collector struct {
 
 // NewCollector creates a ProcessCollector with the given config.
 func NewCollector(cfg Config) *Collector {
-	return newCollectorWithSource(cfg, newProcfs())
+	return newCollectorWithSource(cfg, procfs.New())
 }
 
 // newCollectorWithSource creates a ProcessCollector with a custom process source.
 // Used in tests to inject a fake process list without OS interaction.
-func newCollectorWithSource(cfg Config, source procSource) *Collector {
+func newCollectorWithSource(cfg Config, source procfs.Source) *Collector {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 2 * time.Second
 	}
@@ -176,7 +177,7 @@ func (c *Collector) poll(ctx context.Context) []events.Event {
 	nowMono := time.Now()
 	now := nowMono.UTC()
 	memTotal := c.source.MemTotal()
-	current := make(map[int32]procSample, len(procs))
+	current := make(map[int32]procfs.Sample, len(procs))
 	for _, p := range procs {
 		current[p.PID] = p
 	}
@@ -264,7 +265,7 @@ func (c *Collector) newProcessEvents(snap *ProcessSnapshot, now time.Time) []eve
 
 // snapshotProcess starts tracking a process. The binary path and command line
 // are read once here; a process that has exited already gets empty ones.
-func (c *Collector) snapshotProcess(p procSample, isNew bool, now time.Time) *ProcessSnapshot {
+func (c *Collector) snapshotProcess(p procfs.Sample, isNew bool, now time.Time) *ProcessSnapshot {
 	exe, cmdline := c.source.Details(p.PID)
 	if cmdline == "" {
 		cmdline = p.Name
