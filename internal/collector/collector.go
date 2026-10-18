@@ -2,7 +2,10 @@ package collector
 
 import (
 	"context"
+	"fmt"
 	"path"
+	"sync"
+	"time"
 
 	"github.com/yominsops/yomins-agent/internal/metrics"
 )
@@ -39,31 +42,101 @@ func matchesAnyGlob(name string, patterns []string) bool {
 	return false
 }
 
+// DefaultCollectTimeout bounds one collector's Collect call when the registry
+// has no other timeout set.
+const DefaultCollectTimeout = 20 * time.Second
+
 // Registry holds a set of enabled Collectors.
 type Registry struct {
 	collectors []Collector
+	timeout    time.Duration
+
+	mu   sync.Mutex
+	busy map[string]bool // collectors whose last Collect has not returned yet
 }
 
 // NewRegistry creates a Registry from the provided collectors.
 func NewRegistry(collectors ...Collector) *Registry {
-	return &Registry{collectors: collectors}
+	return &Registry{collectors: collectors, timeout: DefaultCollectTimeout, busy: map[string]bool{}}
 }
 
-// CollectAll runs all collectors sequentially, accumulates results, and records
-// per-collector errors without stopping the overall collection pass.
-// Partial results are always returned even when some collectors fail.
-func (r *Registry) CollectAll(ctx context.Context) ([]metrics.MetricPoint, map[string]error) {
-	var points []metrics.MetricPoint
-	errs := make(map[string]error)
+// WithTimeout sets how long one collector may take before the pass goes on
+// without it. Non-positive values keep the default.
+func (r *Registry) WithTimeout(d time.Duration) *Registry {
+	if d > 0 {
+		r.timeout = d
+	}
+	return r
+}
 
-	for _, c := range r.collectors {
-		pts, err := c.Collect(ctx)
-		if err != nil {
-			errs[c.Name()] = err
+// CollectAll runs all collectors concurrently, each bounded by the registry
+// timeout, and returns their points in registration order. Per-collector
+// errors are recorded without stopping the pass; partial results are always
+// returned.
+//
+// A collector that overruns is reported as timed out and the pass returns
+// without it. Some calls cannot be interrupted (statfs on a hung NFS mount,
+// an external tool), so such a collector is not started again until its last
+// call has returned; meanwhile it is reported as still running.
+func (r *Registry) CollectAll(ctx context.Context) ([]metrics.MetricPoint, map[string]error) {
+	type result struct {
+		pts []metrics.MetricPoint
+		err error
+	}
+	results := make([]result, len(r.collectors))
+	var wg sync.WaitGroup
+
+	for i, c := range r.collectors {
+		name := c.Name()
+		if !r.start(name) {
+			results[i].err = fmt.Errorf("previous collection still running")
 			continue
 		}
-		points = append(points, pts...)
+		done := make(chan result, 1)
+		cctx, cancel := context.WithTimeout(ctx, r.timeout)
+		go func() {
+			defer r.finish(name)
+			pts, err := c.Collect(cctx)
+			done <- result{pts, err}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer cancel()
+			select {
+			case res := <-done:
+				results[i] = res
+			case <-cctx.Done():
+				results[i].err = fmt.Errorf("timed out after %s", r.timeout)
+			}
+		}()
 	}
+	wg.Wait()
 
+	var points []metrics.MetricPoint
+	errs := make(map[string]error)
+	for i, res := range results {
+		if res.err != nil {
+			errs[r.collectors[i].Name()] = res.err
+			continue
+		}
+		points = append(points, res.pts...)
+	}
 	return points, errs
+}
+
+func (r *Registry) start(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.busy[name] {
+		return false
+	}
+	r.busy[name] = true
+	return true
+}
+
+func (r *Registry) finish(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.busy, name)
 }

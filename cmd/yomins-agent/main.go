@@ -89,9 +89,10 @@ func run() error {
 	})
 	upgradeManager.RunOnce(ctx)
 
-	// 6. Build collector registry.
+	// 6. Build collector registry. A collector may use up to half the interval
+	// so a slow one cannot delay the push into the next tick.
 	collectors := buildCollectors(cfg)
-	reg := collector.NewRegistry(collectors...)
+	reg := collector.NewRegistry(collectors...).WithTimeout(min(cfg.Interval/2, collector.DefaultCollectTimeout))
 
 	// 6b. Start event collection pipeline (Linux only; no-op on other platforms).
 	// The metrics and event transports share one session: a 401/403 on
