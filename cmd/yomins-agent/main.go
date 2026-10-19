@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -27,7 +28,8 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	// Stopping (SIGTERM, Ctrl-C) cancels the context: a clean exit, not a failure.
+	if err := run(); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
