@@ -17,6 +17,8 @@ type PipelineConfig struct {
 	// FanInDepth is the depth of the internal fan-in channel.
 	// Defaults to 256.
 	FanInDepth int
+	// Counter, when set, counts every event for the metrics.
+	Counter *Counter
 }
 
 // Pipeline wires EventCollectors to a shared RingBuffer.
@@ -26,6 +28,7 @@ type Pipeline struct {
 	collectors []EventCollector
 	buf        *RingBuffer
 	fanIn      chan Event
+	counter    *Counter
 }
 
 // NewPipeline constructs a Pipeline with the given config and collectors.
@@ -40,6 +43,7 @@ func NewPipeline(cfg PipelineConfig, collectors ...EventCollector) *Pipeline {
 		collectors: collectors,
 		buf:        NewRingBuffer(cfg.BufferSize),
 		fanIn:      make(chan Event, cfg.FanInDepth),
+		counter:    cfg.Counter,
 	}
 }
 
@@ -75,6 +79,9 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	// Fan-in loop: read from the channel, push to buffer, log each event.
 	for ev := range p.fanIn {
 		p.buf.Push(ev)
+		if p.counter != nil {
+			p.counter.Add(ev)
+		}
 		if data, err := json.Marshal(ev); err == nil {
 			slog.Debug("event", "type", string(ev.Type), "severity", string(ev.Severity), "payload", string(data))
 		}

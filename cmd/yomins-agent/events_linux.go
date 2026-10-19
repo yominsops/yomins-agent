@@ -9,6 +9,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/yominsops/yomins-agent/internal/collector"
 	"github.com/yominsops/yomins-agent/internal/config"
 	"github.com/yominsops/yomins-agent/internal/events"
 	"github.com/yominsops/yomins-agent/internal/events/auth"
@@ -20,11 +21,12 @@ import (
 )
 
 // startEventPipeline builds and starts the event collection pipeline in a
-// background goroutine. It returns immediately; the pipeline runs until ctx
+// background goroutine and returns the collector counting its events (nil
+// when no event collector runs). It returns immediately; the pipeline runs until ctx
 // is cancelled. This function is a no-op if cfg.DisableEvents is true.
-func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string, session *transport.Session) {
+func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string, session *transport.Session) collector.Collector {
 	if cfg.DisableEvents {
-		return
+		return nil
 	}
 
 	hostIP := resolveHostIP()
@@ -75,11 +77,13 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 	}
 
 	if len(collectors) == 0 {
-		return
+		return nil
 	}
 
+	counter := events.NewCounter()
 	pipeline := events.NewPipeline(events.PipelineConfig{
 		BufferSize: cfg.EventBufferSize,
+		Counter:    counter,
 	}, collectors...)
 
 	go func() {
@@ -105,6 +109,7 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 			}
 		}()
 	}
+	return counter
 }
 
 // resolveHostIP returns the first non-loopback IPv4 address found on the host.

@@ -62,8 +62,11 @@ func run() error {
 	// 4. Dry-run mode: print metrics to stdout, skip server/identity/upgrades.
 	if cfg.DryRun {
 		fmt.Fprintf(os.Stderr, "dry-run mode: collecting every %s, printing to stdout (Ctrl-C to stop)\n", cfg.Interval)
-		startEventPipeline(ctx, cfg, hostname, nil)
+		eventCounter := startEventPipeline(ctx, cfg, hostname, nil)
 		collectors := buildCollectors(cfg)
+		if eventCounter != nil {
+			collectors = append(collectors, eventCounter)
+		}
 		reg := collector.NewRegistry(collectors...)
 		self := collector.NewSelfMetricsCollector("dry-run", time.Now())
 		tp := transport.NewStdoutTransport()
@@ -117,11 +120,14 @@ func run() error {
 	// The metrics, event and log transports share one session: a 401/403 on
 	// any of them pauses all.
 	session := transport.NewSession()
-	startEventPipeline(ctx, cfg, hostname, session)
+	eventCounter := startEventPipeline(ctx, cfg, hostname, session)
 
 	// 6b. Start log shipping (when enabled); its counters go out with the metrics.
 	configInfo := &remote.InfoCollector{Version: remoteVersion, Mode: cfg.RemoteConfig}
 	collectors := append(buildCollectors(cfg), configInfo)
+	if eventCounter != nil {
+		collectors = append(collectors, eventCounter)
+	}
 	if stats := startLogPipeline(ctx, cfg, hostname, id.AgentID, session); stats != nil {
 		collectors = append(collectors, stats)
 	}

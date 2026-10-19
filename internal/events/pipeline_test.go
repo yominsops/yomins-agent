@@ -233,3 +233,32 @@ func TestPipeline_Run_BufferOverflowDoesNotBlock(t *testing.T) {
 		t.Error("expected some events in buffer or some dropped, got neither")
 	}
 }
+
+func TestPipeline_CountsEvents(t *testing.T) {
+	counter := NewCounter()
+	c := &countingSource{evs: []Event{{Type: EventAuthLoginFailed}, {Type: EventAuthLoginFailed}, {Type: EventProcessReverseShell}}}
+	p := NewPipeline(PipelineConfig{Counter: counter}, c)
+	if err := p.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := counter.Collect(context.Background())
+	got := map[string]float64{}
+	for _, pt := range pts {
+		got[pt.Labels["type"]] = pt.Value
+	}
+	if got["auth.login_failed"] != 2 || got["process.reverse_shell"] != 1 || got["system.reboot"] != 0 || len(pts) != len(AllTypes) {
+		t.Errorf("counts: %v (%d series)", got, len(pts))
+	}
+}
+
+// countingSource sends its events and exits.
+type countingSource struct{ evs []Event }
+
+func (s *countingSource) Name() string { return "test" }
+
+func (s *countingSource) Run(ctx context.Context, out chan<- Event) error {
+	for _, e := range s.evs {
+		out <- e
+	}
+	return nil
+}

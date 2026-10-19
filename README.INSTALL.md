@@ -46,12 +46,49 @@ The script requires HTTPS for `--server` and will refuse plain `http://` URLs.
 
 ---
 
+## After installing: logs and service statistics
+
+The agent works without anything below; each step adds what it can read.
+
+**Logs.** Off by default. Turn them on for the project in the portal (Admin → project → Agent: "Ship logs", or a profile), or on the host with `YOMINS_LOGS=auto` in `/etc/yomins-agent/env`. Duplicated logs can be left out with `YOMINS_LOG_EXCLUDE` (comma-separated globs), e.g. `/var/log/nginx/*.analytics.log`.
+
+**Agents installed before v1.2.0** must re-run the installer once (`curl -fsSL https://get.yominsops.com/agent | sudo bash`): self-upgrade replaces only the binary, and reading logs needs the new service unit.
+
+**nginx** — a local status page:
+
+```nginx
+# /etc/nginx/conf.d/yomins-status.conf
+server {
+    listen 127.0.0.1:8099;
+    location = /nginx_status { stub_status; access_log off; allow 127.0.0.1; deny all; }
+}
+```
+
+**PHP-FPM** — in every pool, `pm.status_path = /fpm-status`, and let the agent reach the pool's socket: `usermod -aG www-data yomins-agent` (the socket's group), then restart PHP-FPM and the agent.
+
+**MySQL / MariaDB** — an account for the agent's OS user; it reads no data:
+
+```sql
+-- MariaDB
+CREATE USER 'yomins-agent'@'localhost' IDENTIFIED VIA unix_socket;
+GRANT SLAVE MONITOR ON *.* TO 'yomins-agent'@'localhost';
+-- MySQL 8: CREATE USER 'yomins-agent'@'localhost' IDENTIFIED WITH auth_socket; GRANT REPLICATION CLIENT ON *.* TO 'yomins-agent'@'localhost';
+```
+
+For slow queries in the logs, enable the slow query log (`slow_query_log = 1`, `long_query_time = 1`).
+
+**Mail queue** (Exim, Postfix) needs nothing.
+
+`agent_integration_status{integration,status}` tells, per service, whether the agent reads it (`ok`), finds it without statistics (`unconfigured`) or fails (`error`).
+
+---
+
 ## Option 2 — Manual systemd (bare-metal and VMs)
 
 **1. Download the binary**
 
 ```bash
-curl -fsSL https://github.com/yominsops/agent/releases/latest/download/yomins-agent-linux-amd64 \
+curl -fsSL https://github.com/yominsops/yomins-agent/releases/latest/download/yomins-agent-linux-amd64 \
   -o /usr/local/bin/yomins-agent
 chmod +x /usr/local/bin/yomins-agent
 ```
@@ -76,7 +113,7 @@ chmod 600 /etc/yomins-agent/env
 **4. Install and start the service**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yominsops/agent/main/systemd/yomins-agent.service \
+curl -fsSL https://raw.githubusercontent.com/yominsops/yomins-agent/main/systemd/yomins-agent.service \
   -o /etc/systemd/system/yomins-agent.service
 systemctl daemon-reload
 systemctl enable --now yomins-agent

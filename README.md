@@ -229,6 +229,10 @@ Domain-specific payloads (`process`, `network`) are added for relevant event typ
 | `warning` | login_failed, sudo, process.high_cpu/memory, process.exec_tmp, auth.login_new_ip, network.suspicious_port, system.reboot/oom_killer, system.user_deleted |
 | `critical` | auth.bruteforce_detected, process.suspicious, process.reverse_shell, network.scan_detected, system.user_created, system.config_modified |
 
+### Counts for alerting
+
+The agent also counts the events it detects and pushes the counts with the metrics as `security_events_total{type}` (every type starts at 0), so alert rules can fire on them: e.g. `increase(security_events_total{type="process.reverse_shell"}[10m]) > 0`.
+
 ### auth.*
 
 | Event | Trigger | Data source |
