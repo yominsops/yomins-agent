@@ -85,12 +85,14 @@ func run() error {
 
 	// 5a. Apply the configuration set in the portal, as last fetched.
 	remoteVersion := ""
+	var remoteApplied remote.Config
 	if stored, ok := remote.Load(cfg.StateDir); ok && cfg.RemoteConfig != remote.ModeOff {
 		if err := remote.Validate(stored.Config); err != nil {
 			slog.Warn("remote config: stored configuration refused", "error", err)
 		} else {
 			remote.Apply(cfg, stored.Config, cfg.RemoteConfig)
 			remoteVersion = stored.Version
+			remoteApplied = stored.Config
 			slog.Info("remote config applied", "version", stored.Version, "mode", cfg.RemoteConfig)
 		}
 	}
@@ -118,7 +120,8 @@ func run() error {
 	startEventPipeline(ctx, cfg, hostname, session)
 
 	// 6b. Start log shipping (when enabled); its counters go out with the metrics.
-	collectors := append(buildCollectors(cfg), remote.InfoCollector{Version: remoteVersion, Mode: cfg.RemoteConfig})
+	configInfo := &remote.InfoCollector{Version: remoteVersion, Mode: cfg.RemoteConfig}
+	collectors := append(buildCollectors(cfg), configInfo)
 	if stats := startLogPipeline(ctx, cfg, hostname, id.AgentID, session); stats != nil {
 		collectors = append(collectors, stats)
 	}
@@ -157,7 +160,7 @@ func run() error {
 
 	fetcher := &remote.Fetcher{
 		Server: cfg.Server, Token: cfg.Token, Hostname: hostname, StateDir: cfg.StateDir, Mode: cfg.RemoteConfig,
-		Current: remoteVersion, Started: time.Now(), Session: session,
+		Current: remoteVersion, Applied: remoteApplied, Info: configInfo, Started: time.Now(), Session: session,
 		Restart: func(v string) {
 			restartVersion.Store(v)
 			restartForConfig()

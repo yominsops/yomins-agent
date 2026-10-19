@@ -62,3 +62,17 @@ func TestIsRotatedName(t *testing.T) {
 		}
 	}
 }
+
+func TestHasDigitRun(t *testing.T) {
+	for in, want := range map[string]bool{
+		"4111 1111 1111 1111":  true,
+		"4111-1111-1111-1111":  true,
+		"id 123456789012 done": false,
+		"12 34  56 78 90 12 3": false,
+		"order 1234567890123":  true,
+	} {
+		if got := hasDigitRun(in, 13); got != want {
+			t.Errorf("%q: %v", in, got)
+		}
+	}
+}

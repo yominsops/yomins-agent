@@ -23,6 +23,11 @@ const (
 	maxFiles = 500
 	// partialFlush is how long an unterminated last line waits for its newline.
 	partialFlush = 5 * time.Second
+	// discoverEvery spaces the glob searches for new files. Between them only
+	// the followed files are checked (rotation, removal), every pass: a log
+	// directory with hundreds of rotated files made the every-second globbing
+	// the agent's largest cost.
+	discoverEvery = 10 * time.Second
 )
 
 // FileSpec describes a group of files read the same way.
@@ -41,7 +46,10 @@ type FileSource struct {
 	allow     []string
 	positions *Positions
 	interval  time.Duration
+	discovery time.Duration
+	lastFound time.Time
 	files     map[string]*tailedFile
+	buf       []byte // one read buffer for all files; lines are copied out of it
 	started   time.Time
 	warned    map[string]bool
 }
@@ -66,6 +74,7 @@ func NewFileSource(specs []FileSpec, allow []string, positions *Positions) *File
 		allow:     allow,
 		positions: positions,
 		interval:  time.Second,
+		discovery: discoverEvery,
 		files:     map[string]*tailedFile{},
 		warned:    map[string]bool{},
 	}
@@ -107,21 +116,45 @@ func (s *FileSource) sorted() []*tailedFile {
 	return out
 }
 
-// scan finds the files the specs match now, opens new ones and notices
-// rotated or vanished ones.
+// scan notices rotated or vanished files and, every discovery interval,
+// finds the files the specs match now and opens the new ones.
 func (s *FileSource) scan() {
+	if time.Since(s.lastFound) >= s.discovery {
+		s.lastFound = time.Now()
+		s.discover()
+	}
+	for p, tf := range s.files {
+		fi, err := os.Stat(p)
+		if err != nil {
+			tf.gone = true
+			continue
+		}
+		if inodeOf(fi) != tf.inode {
+			// Rotated: finish the old file, the new one is picked up by discovery.
+			tf.gone = true
+		}
+	}
+}
+
+// discover globs the specs: new files are opened, followed ones that no
+// longer match are marked gone.
+func (s *FileSource) discover() {
 	seen := map[string]bool{}
 	for _, spec := range s.specs {
 		for _, g := range spec.Globs {
 			matches, _ := filepath.Glob(g)
 			for _, p := range matches {
-				if seen[p] || !s.wanted(p, spec) {
+				if seen[p] {
+					continue
+				}
+				if _, ok := s.files[p]; ok {
+					seen[p] = true
+					continue
+				}
+				if !s.wanted(p, spec) {
 					continue
 				}
 				seen[p] = true
-				if _, ok := s.files[p]; ok {
-					continue
-				}
 				if len(s.files) >= maxFiles {
 					s.warnOnce("max-files", "logs: too many files, not following more", "limit", maxFiles)
 					continue
@@ -134,16 +167,6 @@ func (s *FileSource) scan() {
 	}
 	for p, tf := range s.files {
 		if !seen[p] {
-			tf.gone = true
-			continue
-		}
-		fi, err := os.Stat(p)
-		if err != nil {
-			tf.gone = true
-			continue
-		}
-		if inodeOf(fi) != tf.inode {
-			// Rotated: finish the old file, the new one is picked up next scan.
 			tf.gone = true
 		}
 	}
@@ -206,9 +229,14 @@ func (s *FileSource) read(ctx context.Context, tf *tailedFile, out chan<- Entry)
 			return nil
 		}
 	}
-	buf := make([]byte, readChunk)
-	n, _ := io.ReadFull(tf.f, buf)
-	data := append(tf.partial, buf[:n]...)
+	if s.buf == nil {
+		s.buf = make([]byte, readChunk)
+	}
+	n, _ := io.ReadFull(tf.f, s.buf)
+	data := s.buf[:n]
+	if tf.partial != nil {
+		data = append(tf.partial, data...)
+	}
 	tf.partial = nil
 
 	for len(data) > 0 {
@@ -233,7 +261,8 @@ func (s *FileSource) read(ctx context.Context, tf *tailedFile, out chan<- Entry)
 		}
 		tf.partAt = time.Time{}
 	case len(data) > 0:
-		tf.partial = data
+		// Kept across rounds, so it must not point into the shared buffer.
+		tf.partial = append([]byte(nil), data...)
 		if tf.partAt.IsZero() {
 			tf.partAt = time.Now()
 		}
@@ -244,6 +273,8 @@ func (s *FileSource) read(ctx context.Context, tf *tailedFile, out chan<- Entry)
 	if tf.gone && n < readChunk && len(tf.partial) == 0 {
 		tf.f.Close()
 		delete(s.files, tf.path)
+		// A rotated file's successor is looked for on the next pass.
+		s.lastFound = time.Time{}
 		if _, err := os.Stat(tf.path); err != nil {
 			s.positions.Forget(tf.path)
 		}

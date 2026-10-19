@@ -1,12 +1,14 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/yominsops/yomins-agent/internal/metrics"
@@ -23,6 +25,12 @@ type Fetcher struct {
 	Interval time.Duration // default 60s
 	// Current is the version in use ("" when none).
 	Current string
+	// Applied is the configuration in use (zero when none). A new version that
+	// would change nothing is adopted without a restart: the first, empty
+	// configuration of a new agent, a profile edit that left this host alone.
+	Applied Config
+	// Info, when set, is told about a version adopted without a restart.
+	Info *InfoCollector
 	// Started is when the agent started: restarts are spaced at least
 	// MinUptime apart so a flapping configuration cannot trip systemd's
 	// start limit.
@@ -52,6 +60,14 @@ func (f *Fetcher) Run(ctx context.Context) {
 	defer t.Stop()
 	for {
 		if s, changed := f.check(ctx); changed {
+			if sameEffect(s.Config, f.Applied) {
+				slog.Info("remote config: new version changes nothing here, no restart", "version", s.Version, "was", f.Current)
+				f.Current = s.Version
+				if f.Info != nil {
+					f.Info.SetVersion(s.Version)
+				}
+				goto wait
+			}
 			if wait := f.MinUptime - time.Since(f.Started); wait > 0 {
 				slog.Info("remote config: new version, applying after a short wait", "version", s.Version, "in", wait.Round(time.Second))
 				select {
@@ -64,6 +80,7 @@ func (f *Fetcher) Run(ctx context.Context) {
 			f.Restart(s.Version)
 			return
 		}
+	wait:
 		select {
 		case <-ctx.Done():
 			return
@@ -115,19 +132,37 @@ func (f *Fetcher) check(ctx context.Context) (Stored, bool) {
 	return s, true
 }
 
+// sameEffect reports whether two configurations set exactly the same things.
+func sameEffect(a, b Config) bool {
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(ja, jb)
+}
+
 // InfoCollector reports which configuration the agent runs with.
 type InfoCollector struct {
+	mu      sync.Mutex
 	Version string // "" when there is no remote configuration
 	Mode    string
 }
 
-func (c InfoCollector) Name() string { return "remote_config" }
+// SetVersion records a version adopted while running.
+func (c *InfoCollector) SetVersion(v string) {
+	c.mu.Lock()
+	c.Version = v
+	c.mu.Unlock()
+}
 
-func (c InfoCollector) Collect(context.Context) ([]metrics.MetricPoint, error) {
+func (c *InfoCollector) Name() string { return "remote_config" }
+
+func (c *InfoCollector) Collect(context.Context) ([]metrics.MetricPoint, error) {
+	c.mu.Lock()
+	version := c.Version
+	c.mu.Unlock()
 	source := "local"
-	if c.Version != "" && c.Mode != ModeOff {
+	if version != "" && c.Mode != ModeOff {
 		source = "remote"
 	}
 	return []metrics.MetricPoint{{Name: "agent_config_info", Help: "Always 1; the configuration the agent applies (version of the remote one, source, trust mode)",
-		Type: metrics.Gauge, Value: 1, Labels: map[string]string{"version": c.Version, "config_source": source, "mode": c.Mode}}}, nil
+		Type: metrics.Gauge, Value: 1, Labels: map[string]string{"version": version, "config_source": source, "mode": c.Mode}}}, nil
 }

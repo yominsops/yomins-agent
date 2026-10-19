@@ -99,6 +99,17 @@ func TestTail_Rotation(t *testing.T) {
 	eq(t, got, "before", "after")
 }
 
+func TestTail_NewFilesFoundOnDiscovery(t *testing.T) {
+	h := newHarness(t, nil)
+	h.write("a.log", "")
+	h.round()
+	h.src.started = time.Now().Add(-time.Minute)
+	h.write("b.log", "late\n")
+	eq(t, h.round()) // no glob until the discovery interval passes
+	h.src.lastFound = time.Now().Add(-discoverEvery)
+	eq(t, h.round(), "late")
+}
+
 func TestTail_Truncation(t *testing.T) {
 	h := newHarness(t, nil)
 	h.write("a.log", "")

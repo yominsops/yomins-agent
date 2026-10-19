@@ -142,7 +142,7 @@ func TestFetcher(t *testing.T) {
 
 func TestFetcherRun_RestartsAfterMinUptime(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(Stored{Version: "v9", Config: Config{}})
+		_ = json.NewEncoder(w).Encode(Stored{Version: "v9", Config: Config{Interval: ptr("30s")}})
 	}))
 	defer srv.Close()
 	restarted := make(chan string, 1)
@@ -160,12 +160,36 @@ func TestFetcherRun_RestartsAfterMinUptime(t *testing.T) {
 	}
 }
 
+func TestFetcherRun_NothingChangesNoRestart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(Stored{Version: "v1", Config: Config{}})
+	}))
+	defer srv.Close()
+	info := &InfoCollector{Mode: ModeFull}
+	f := &Fetcher{Server: srv.URL, Token: "t", StateDir: t.TempDir(), Mode: ModeFull, Started: time.Now().Add(-time.Hour), Interval: 10 * time.Millisecond,
+		Info: info, Restart: func(v string) { t.Errorf("restart for %q", v) }, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	f.Run(ctx)
+	if f.Current != "v1" {
+		t.Errorf("version adopted: %q", f.Current)
+	}
+	pts, _ := info.Collect(context.Background())
+	if pts[0].Labels["version"] != "v1" || pts[0].Labels["config_source"] != "remote" {
+		t.Errorf("info: %v", pts[0].Labels)
+	}
+}
+
 func TestInfoCollector(t *testing.T) {
-	pts, _ := InfoCollector{Version: "abc", Mode: ModeFull}.Collect(context.Background())
+	pts, _ := (&InfoCollector{Version: "abc", Mode: ModeFull}).Collect(context.Background())
 	if pts[0].Labels["config_source"] != "remote" || pts[0].Labels["version"] != "abc" {
 		t.Errorf("%v", pts)
 	}
-	pts, _ = InfoCollector{Mode: ModeFull}.Collect(context.Background())
+	pts, _ = (&InfoCollector{Mode: ModeFull}).Collect(context.Background())
 	if pts[0].Labels["config_source"] != "local" {
 		t.Error("no remote version: local")
 	}
