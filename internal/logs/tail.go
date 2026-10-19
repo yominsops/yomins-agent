@@ -3,12 +3,15 @@ package logs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -52,6 +55,7 @@ type FileSource struct {
 	buf       []byte // one read buffer for all files; lines are copied out of it
 	started   time.Time
 	warned    map[string]bool
+	denied    atomic.Int64 // files found at the last discovery that may not be read
 }
 
 type tailedFile struct {
@@ -107,6 +111,10 @@ func (s *FileSource) Run(ctx context.Context, out chan<- Entry) error {
 // Watched returns how many files are followed now.
 func (s *FileSource) Watched() int { return len(s.files) }
 
+// Denied returns how many matching files the agent may not read: a service unit
+// from before v1.2.0 lacks the capability to read logs (re-run the installer).
+func (s *FileSource) Denied() int { return int(s.denied.Load()) }
+
 func (s *FileSource) sorted() []*tailedFile {
 	out := make([]*tailedFile, 0, len(s.files))
 	for _, tf := range s.files {
@@ -140,6 +148,7 @@ func (s *FileSource) scan() {
 // longer match are marked gone.
 func (s *FileSource) discover() {
 	seen := map[string]bool{}
+	denied := 0
 	for _, spec := range s.specs {
 		for _, g := range spec.Globs {
 			matches, _ := filepath.Glob(g)
@@ -159,12 +168,16 @@ func (s *FileSource) discover() {
 					s.warnOnce("max-files", "logs: too many files, not following more", "limit", maxFiles)
 					continue
 				}
-				if tf := s.open(p, spec); tf != nil {
+				tf, err := s.open(p, spec)
+				if tf != nil {
 					s.files[p] = tf
+				} else if errors.Is(err, fs.ErrPermission) {
+					denied++
 				}
 			}
 		}
 	}
+	s.denied.Store(int64(denied))
 	for p, tf := range s.files {
 		if !seen[p] {
 			tf.gone = true
@@ -189,16 +202,16 @@ func (s *FileSource) wanted(p string, spec FileSpec) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-func (s *FileSource) open(p string, spec FileSpec) *tailedFile {
+func (s *FileSource) open(p string, spec FileSpec) (*tailedFile, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		s.warnOnce("open:"+p, "logs: cannot read file", "path", p, "error", err)
-		return nil
+		return nil, err
 	}
 	fi, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil
+		return nil, err
 	}
 	tf := &tailedFile{path: p, spec: spec, parse: ParserFor(spec.Parser), f: f, inode: inodeOf(fi)}
 	switch pos, ok := s.positions.File(p); {
@@ -213,10 +226,10 @@ func (s *FileSource) open(p string, spec FileSpec) *tailedFile {
 	}
 	if _, err := f.Seek(tf.offset, io.SeekStart); err != nil {
 		f.Close()
-		return nil
+		return nil, err
 	}
 	s.positions.SetFile(p, Position{Inode: tf.inode, Offset: tf.offset})
-	return tf
+	return tf, nil
 }
 
 // read sends the complete lines added to tf since the last round. It returns

@@ -231,7 +231,8 @@ confirm() {
     local prompt="Proceed with ${action}? [Y/n] "
     if [[ -t 0 ]]; then
         read -rp "$prompt" answer
-    elif [[ -e /dev/tty ]]; then
+    elif (: </dev/tty) 2>/dev/null; then
+        # /dev/tty can exist without a terminal behind it (ssh without -t, cron).
         read -rp "$prompt" answer </dev/tty
     else
         warn "Non-interactive mode — skipping confirmation."

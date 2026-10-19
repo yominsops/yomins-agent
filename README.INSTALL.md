@@ -52,7 +52,7 @@ The agent works without anything below; each step adds what it can read.
 
 **Logs.** Off by default. Turn them on for the project in the portal (Admin → project → Agent: "Ship logs", or a profile), or on the host with `YOMINS_LOGS=auto` in `/etc/yomins-agent/env`. Duplicated logs can be left out with `YOMINS_LOG_EXCLUDE` (comma-separated globs), e.g. `/var/log/nginx/*.analytics.log`.
 
-**Agents installed before v1.2.0** must re-run the installer once (`curl -fsSL https://get.yominsops.com/agent | sudo bash`): self-upgrade replaces only the binary, and reading logs needs the new service unit.
+**Agents installed before v1.2.3** must re-run the installer once (`curl -fsSL https://get.yominsops.com/agent | sudo bash -s -- --yes`): their self-upgrade replaces only the binary, and reading logs needs the service unit of v1.2.0 or later. From v1.2.3 on self-upgrade brings the new unit too. A host that cannot read its logs reports it as `agent_logs_files_denied`.
 
 **nginx** — a local status page:
 

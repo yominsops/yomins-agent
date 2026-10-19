@@ -12,7 +12,8 @@
 #   applied   — upgrade was applied but agent has not yet committed healthy state
 #   committed — agent's first successful push after the upgrade (safe to discard backup)
 #
-# This script always exits 0 on soft failures so that ExecStart still runs.
+# This script always exits 0 on soft failures so that ExecStart still runs; it
+# exits 1 only right after installing a new service unit, to be restarted under it.
 # Only truly unrecoverable states (e.g., backup missing when we need it) log a
 # warning and let the system continue with whatever binary is currently installed.
 
@@ -25,9 +26,70 @@ PENDING="${UPGRADE_DIR}/pending"
 NEW="${UPGRADE_DIR}/new"
 APPLIED="${UPGRADE_DIR}/applied"
 COMMITTED="${UPGRADE_DIR}/committed"
+UNIT="/etc/systemd/system/yomins-agent.service"
+HELPER="/usr/local/lib/yomins-agent/apply-upgrade.sh"
+RELEASES="https://github.com/yominsops/yomins-agent/releases/download"
 
 log() {
     echo "apply-upgrade: $*" >&2
+}
+
+# refresh_unit VERSION — installs the service unit and this helper of VERSION
+# when the unit differs from the installed one (v1.2.0, for one, added the
+# capability to read logs). Both are fetched here, as root, straight from the
+# release: never from the upgrade directory, which the unprivileged agent can
+# write. Returns 0 only when the unit changed.
+refresh_unit() {
+    version="$1"
+    if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        log "unit refresh: unexpected version '$version', skipped"
+        return 1
+    fi
+    if ! command -v curl >/dev/null 2>&1; then
+        log "unit refresh: no curl, skipped"
+        return 1
+    fi
+    tmp=$(mktemp -d) || return 1
+    if ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent.service" -o "${tmp}/unit" ||
+        ! curl -fsSL --max-time 20 "${RELEASES}/${version}/apply-upgrade.sh" -o "${tmp}/helper"; then
+        log "unit refresh: download failed, keeping the current unit"
+        rm -rf "$tmp"
+        return 1
+    fi
+    if ! grep -q '^ExecStart=/usr/local/bin/yomins-agent' "${tmp}/unit" || ! head -n 1 "${tmp}/helper" | grep -q '^#!/bin/sh'; then
+        log "unit refresh: unexpected files in ${version}, skipped"
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    # Only the supplementary groups this system has: a missing one fails the start.
+    groups=""
+    for g in systemd-journal adm shadow; do
+        if getent group "$g" >/dev/null 2>&1; then
+            groups="${groups:+$groups }$g"
+        fi
+    done
+    awk -v groups="$groups" '
+        /^SupplementaryGroups=/ { if (!done && groups != "") print "SupplementaryGroups=" groups; done = 1; next }
+        { print }
+    ' "${tmp}/unit" >"${tmp}/unit.final"
+
+    cp "${tmp}/helper" "${HELPER}.new"
+    chmod 755 "${HELPER}.new"
+    mv "${HELPER}.new" "$HELPER"
+
+    if cmp -s "${tmp}/unit.final" "$UNIT"; then
+        rm -rf "$tmp"
+        return 1
+    fi
+    cp "${tmp}/unit.final" "${UNIT}.new"
+    chmod 644 "${UNIT}.new"
+    mv "${UNIT}.new" "$UNIT"
+    if command -v restorecon >/dev/null 2>&1; then restorecon "$UNIT" || true; fi
+    systemctl daemon-reload
+    rm -rf "$tmp"
+    log "unit refresh: service unit of ${version} installed"
+    return 0
 }
 
 # Fast path: no upgrade activity.
@@ -65,7 +127,18 @@ if [ -f "$PENDING" ]; then
         exit 0
     fi
 
-    log "applying upgrade (pending=$(cat "$PENDING" 2>/dev/null || echo unknown))"
+    version=$(cat "$PENDING" 2>/dev/null || echo unknown)
+
+    # A new unit first. The start fails on purpose and systemd starts the
+    # service again (Restart=always) under the new unit; that run finds the
+    # unit current and applies the binary. Nothing is applied yet, so the
+    # failed start is not mistaken for a crashed upgrade.
+    if refresh_unit "$version"; then
+        log "restarting under the new unit"
+        exit 1
+    fi
+
+    log "applying upgrade (pending=${version})"
 
     # Back up the current binary before touching it.
     cp "$BINARY" "$BACKUP"

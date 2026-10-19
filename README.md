@@ -367,6 +367,7 @@ Parsers set the line's own time, a level (`error`, `warn`, `info`, `debug`) and 
 | `agent_logs_retries_total` | Failed delivery attempts |
 | `agent_logs_last_delivery_timestamp` | Last delivered batch |
 | `agent_logs_files_watched` | Files followed now |
+| `agent_logs_files_denied` | Files found that the agent may not read — the service unit is older than v1.2.0: re-run the installer |
 
 ## Remote configuration
 
@@ -551,6 +552,8 @@ The agent upgrades itself automatically. On startup and every `--auto-upgrade-in
 2. The new binary is staged in the agent's state directory (`/var/lib/yomins/agent/upgrade/`).
 3. The agent exits cleanly; systemd restarts it.
 4. On the next start a privileged pre-start script (`apply-upgrade.sh`) atomically replaces `/usr/local/bin/yomins-agent` before the agent process launches.
+
+**Service unit.** Since v1.2.3 the pre-start script also fetches the new version's service unit and itself from the release (as root, from GitHub — never from the state directory, which the agent can write). When the unit differs it is installed, the start fails on purpose and systemd starts the agent again under the new unit; that run applies the binary. Hosts whose helper is older than v1.2.3 (installed before it) re-run the installer once to get it.
 
 **Automatic rollback:** if the new binary crashes before successfully pushing metrics for the first time, `apply-upgrade.sh` detects the uncommitted upgrade on the following restart and restores the backup automatically.
 

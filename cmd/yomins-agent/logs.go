@@ -32,6 +32,7 @@ func startLogPipeline(ctx context.Context, cfg *config.Config, hostname, agentID
 
 	fileSource := logs.NewFileSource(plan.Files, allow, positions)
 	stats.Watch(fileSource.Watched)
+	stats.WatchDenied(fileSource.Denied)
 	sources := []logs.Source{fileSource}
 	if plan.Journal {
 		sources = append(sources, logs.NewJournalSource(nil, positions))

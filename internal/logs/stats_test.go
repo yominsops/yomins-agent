@@ -10,6 +10,7 @@ import (
 func TestStats_Collect(t *testing.T) {
 	s := NewStats()
 	s.Watch(func() int { return 3 })
+	s.WatchDenied(func() int { return 2 })
 	s.shipped([]Entry{{Source: "nginx"}, {Source: "nginx"}, {Source: "syslog"}}, 120)
 	s.droppedN("refused", 2)
 	s.retry()
@@ -24,6 +25,7 @@ func TestStats_Collect(t *testing.T) {
 	want := map[string]float64{
 		"agent_logs_lines_total/nginx": 2, "agent_logs_lines_total/syslog": 1, "agent_logs_dropped_total/refused": 2,
 		"agent_logs_bytes_total/": 120, "agent_logs_retries_total/": 1, "agent_logs_files_watched/": 3,
+		"agent_logs_files_denied/": 2,
 	}
 	for k, v := range want {
 		if got[k] != v {

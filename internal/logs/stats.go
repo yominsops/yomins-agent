@@ -18,6 +18,7 @@ type Stats struct {
 	retries  float64
 	lastShip time.Time
 	watchers []func() int
+	deniers  []func() int
 	derived  *lineMetrics
 }
 
@@ -31,6 +32,13 @@ func (s *Stats) Watch(f func() int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.watchers = append(s.watchers, f)
+}
+
+// WatchDenied registers a function reporting how many files may not be read.
+func (s *Stats) WatchDenied(f func() int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deniers = append(s.deniers, f)
 }
 
 func (s *Stats) shipped(batch []Entry, n int) {
@@ -89,7 +97,14 @@ func (s *Stats) Collect(context.Context) ([]metrics.MetricPoint, error) {
 		watched += f()
 	}
 	pts = append(pts, s.derived.points()...)
-	pts = append(pts, metrics.MetricPoint{Name: "agent_logs_files_watched", Help: "Log files followed now", Type: metrics.Gauge, Value: float64(watched)})
+	denied := 0
+	for _, f := range s.deniers {
+		denied += f()
+	}
+	pts = append(pts,
+		metrics.MetricPoint{Name: "agent_logs_files_watched", Help: "Log files followed now", Type: metrics.Gauge, Value: float64(watched)},
+		metrics.MetricPoint{Name: "agent_logs_files_denied", Help: "Log files found that the agent may not read (re-run the installer)", Type: metrics.Gauge, Value: float64(denied)},
+	)
 	return pts, nil
 }
 

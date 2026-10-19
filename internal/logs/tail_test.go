@@ -193,3 +193,32 @@ func TestTail_ParserAndSourceApplied(t *testing.T) {
 		t.Errorf("%+v", e)
 	}
 }
+
+func TestTail_CountsFilesItMayNotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any file")
+	}
+	h := newHarness(t, nil)
+	h.write("a.log", "")
+	h.write("b.log", "")
+	if err := os.Chmod(filepath.Join(h.dir, "b.log"), 0); err != nil {
+		t.Fatal(err)
+	}
+	h.round()
+	if got := h.src.Denied(); got != 1 {
+		t.Errorf("denied = %d, want 1", got)
+	}
+	if got := h.src.Watched(); got != 1 {
+		t.Errorf("watched = %d, want 1", got)
+	}
+
+	// Readable again (the new unit): counted no more once discovery runs.
+	if err := os.Chmod(filepath.Join(h.dir, "b.log"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.src.lastFound = time.Time{}
+	h.round()
+	if got := h.src.Denied(); got != 0 {
+		t.Errorf("denied after chmod = %d, want 0", got)
+	}
+}
