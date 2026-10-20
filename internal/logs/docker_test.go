@@ -154,7 +154,9 @@ func TestTail_DockerLinesNameTheirContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString(`{"log":"PHP Fatal error:  boom\n","stream":"stderr","time":"2026-10-19T19:18:00Z"}` + "\n")
+	if _, err := f.WriteString(`{"log":"PHP Fatal error:  boom\n","stream":"stderr","time":"2026-10-19T19:18:00Z"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
 	f.Close()
 	for _, tf := range src.sorted() {
 		_ = src.read(context.Background(), tf, out)
