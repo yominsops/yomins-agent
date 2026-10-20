@@ -345,11 +345,15 @@ Off by default. With `YOMINS_LOGS=auto` the agent finds the logs of the software
 | `postgresql`, `redis`, `mongodb` | their `/var/log/<name>/` | auto / plain / JSON |
 | `mail`, `exim`, `dovecot` | `mail.log`, `maillog`, `exim4/*log`, `dovecot*.log` | syslog / plain |
 | `ftp`, `fail2ban`, `clamav` | `vsftpd.log`, `xferlog`, `fail2ban.log`, `clamav/` | plain |
-| `docker` | `/var/lib/docker/containers/*/*-json.log` | Docker json-file |
+| `docker` | `/var/lib/docker/containers/*/*-json.log`; lines carry `container` and `image` | Docker json-file |
 | `app` | `/home/*/logs/`, `/var/www/*/logs/`, `/var/log/yomins/` | auto (JSON, syslog or plain) |
 | `journal` | the systemd journal, only when no `/var/log/syslog` or `/var/log/messages` exists | journal |
 
 Parsers set the line's own time, a level (`error`, `warn`, `info`, `debug`) and a few fields (status, path, vhost, program…).
+
+**Software in containers.** When a container keeps its logs on the host through a mount (nginx with `./logs:/var/log/nginx`, MariaDB with `./db:/var/lib/mysql`), the agent finds the host side of the mount in Docker's configuration (`/var/lib/docker/containers/*/config.v2.json`, read at startup) and reads the files as above, with the right parser and a `container` field. These host paths join the default allow list; an explicit `YOMINS_LOG_ALLOW` is kept as it is.
+
+**Other places.** Extra globs (`YOMINS_LOG_PATHS`, or "Extra log files" in the portal) may name what they hold: `nginx:/srv/site/logs/*.log` is read with the nginx parsers (`*error*` files as error logs), `php-fpm:`, `mysql:`, `apache:`, `syslog:`, `json:` likewise; another name (`myapp:/opt/app/*.log`) becomes the source with the auto parser, and a bare glob is source `custom`.
 
 **Delivery.** Files are followed like `tail -F`: rotation and truncation are handled. A file's position is saved only after its lines were delivered (`<state-dir>/log_positions.json`), so the files themselves are the buffer: during an outage reading pauses, and nothing is lost on restart. What a file holds when the agent first sees it is not shipped. Batches are gzip-compressed NDJSON, retried until delivered.
 
@@ -368,6 +372,7 @@ Parsers set the line's own time, a level (`error`, `warn`, `info`, `debug`) and 
 | `agent_logs_last_delivery_timestamp` | Last delivered batch |
 | `agent_logs_files_watched` | Files followed now |
 | `agent_logs_files_denied` | Files found that the agent may not read — the service unit is older than v1.2.0: re-run the installer |
+| `agent_logs_files_outside_allow` | Files matched by the configured globs that lie outside `YOMINS_LOG_ALLOW` — skipped; widen the allow list on the host |
 
 ## Remote configuration
 
@@ -451,7 +456,7 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--event-flush-interval` | `YOMINS_EVENT_FLUSH_INTERVAL` | `10s` | How often to flush buffered events to the server |
 | `--event-batch-size` | `YOMINS_EVENT_BATCH_SIZE` | `200` | Maximum number of events per HTTP request |
 | `--logs` | `YOMINS_LOGS` | `off` | Log collection: `off` or `auto` (see [Logs](#logs)) |
-| `--log-paths` | `YOMINS_LOG_PATHS` | *(none)* | Comma-separated extra log file globs, read with the auto parser as source `custom` |
+| `--log-paths` | `YOMINS_LOG_PATHS` | *(none)* | Comma-separated extra log file globs; `source:/glob` picks the parser (see [Logs](#logs)), a bare glob is read with the auto parser as source `custom` |
 | `--log-exclude` | `YOMINS_LOG_EXCLUDE` | *(none)* | Comma-separated globs of log files never to read |
 | `--log-allow` | `YOMINS_LOG_ALLOW` | *(see [Logs](#logs))* | Comma-separated globs logs may be read from; `**` spans directories |
 | `--remote-config` | `YOMINS_REMOTE_CONFIG` | `full` | Trust in the portal's configuration: `full`, `limited`, `off` (see [Remote configuration](#remote-configuration)) |

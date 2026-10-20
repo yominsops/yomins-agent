@@ -3,6 +3,7 @@ package logs
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,7 +27,25 @@ const (
 	ParserDockerJSON  = "docker_json"
 	// ParserAuto picks JSON, syslog or plain per line; for files of unknown shape.
 	ParserAuto = "auto"
+	// ParserNginxAny and ParserApacheAny read files named *error* as error
+	// logs and the others as access logs.
+	ParserNginxAny  = "nginx_any"
+	ParserApacheAny = "apache_any"
 )
+
+// parserForFile resolves the parsers that depend on the file's name.
+func parserForFile(name, path string) Parser {
+	isError := strings.Contains(filepath.Base(path), "error")
+	switch {
+	case name == ParserNginxAny && isError:
+		return parseNginxError
+	case name == ParserApacheAny && isError:
+		return parsePlain
+	case name == ParserNginxAny, name == ParserApacheAny:
+		return parseNginxAccess
+	}
+	return ParserFor(name)
+}
 
 // ParserFor returns the named parser; unknown names get the plain one.
 func ParserFor(name string) Parser {

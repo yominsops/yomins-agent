@@ -39,6 +39,9 @@ type FileSpec struct {
 	Globs   []string // shell globs; ** is not supported, use one level per glob
 	Exclude []string // globs matched against the full path
 	Parser  string   // parser name, see ParserFor
+	// Container is the Docker container writing these files, when they were
+	// found through its mounts.
+	Container string
 }
 
 // FileSource follows the files of its specs, tail -F style: rotation (a new
@@ -56,6 +59,7 @@ type FileSource struct {
 	started   time.Time
 	warned    map[string]bool
 	denied    atomic.Int64 // files found at the last discovery that may not be read
+	outside   atomic.Int64 // files found at the last discovery outside the allow list
 }
 
 type tailedFile struct {
@@ -67,7 +71,9 @@ type tailedFile struct {
 	offset  int64 // bytes read so far (start of the partial line)
 	partial []byte
 	partAt  time.Time
-	gone    bool // path vanished or was rotated away; drain then close
+	gone    bool   // path vanished or was rotated away; drain then close
+	ctr     string // the container writing it
+	image   string
 }
 
 // NewFileSource builds a source over specs. allow limits which paths may be
@@ -115,6 +121,10 @@ func (s *FileSource) Watched() int { return len(s.files) }
 // from before v1.2.0 lacks the capability to read logs (re-run the installer).
 func (s *FileSource) Denied() int { return int(s.denied.Load()) }
 
+// Outside returns how many matching files lie outside the allow list: a path
+// set in the portal that the host's YOMINS_LOG_ALLOW does not cover.
+func (s *FileSource) Outside() int { return int(s.outside.Load()) }
+
 func (s *FileSource) sorted() []*tailedFile {
 	out := make([]*tailedFile, 0, len(s.files))
 	for _, tf := range s.files {
@@ -148,7 +158,7 @@ func (s *FileSource) scan() {
 // longer match are marked gone.
 func (s *FileSource) discover() {
 	seen := map[string]bool{}
-	denied := 0
+	denied, outside := 0, 0
 	for _, spec := range s.specs {
 		for _, g := range spec.Globs {
 			matches, _ := filepath.Glob(g)
@@ -160,7 +170,11 @@ func (s *FileSource) discover() {
 					seen[p] = true
 					continue
 				}
-				if !s.wanted(p, spec) {
+				switch s.wanted(p, spec) {
+				case verdictSkip:
+					continue
+				case verdictOutside:
+					outside++
 					continue
 				}
 				seen[p] = true
@@ -178,6 +192,7 @@ func (s *FileSource) discover() {
 		}
 	}
 	s.denied.Store(int64(denied))
+	s.outside.Store(int64(outside))
 	for p, tf := range s.files {
 		if !seen[p] {
 			tf.gone = true
@@ -185,21 +200,31 @@ func (s *FileSource) discover() {
 	}
 }
 
-func (s *FileSource) wanted(p string, spec FileSpec) bool {
+type verdict int
+
+const (
+	verdictRead verdict = iota
+	verdictSkip
+	verdictOutside
+)
+
+func (s *FileSource) wanted(p string, spec FileSpec) verdict {
 	if isRotatedName(p) {
-		return false
+		return verdictSkip
 	}
 	for _, ex := range spec.Exclude {
 		if ok, _ := filepath.Match(ex, p); ok {
-			return false
+			return verdictSkip
 		}
+	}
+	if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
+		return verdictSkip
 	}
 	if !Allowed(p, s.allow) {
 		s.warnOnce("allow:"+p, "logs: path not in the allowed list, skipped", "path", p)
-		return false
+		return verdictOutside
 	}
-	fi, err := os.Stat(p)
-	return err == nil && fi.Mode().IsRegular()
+	return verdictRead
 }
 
 func (s *FileSource) open(p string, spec FileSpec) (*tailedFile, error) {
@@ -213,7 +238,12 @@ func (s *FileSource) open(p string, spec FileSpec) (*tailedFile, error) {
 		f.Close()
 		return nil, err
 	}
-	tf := &tailedFile{path: p, spec: spec, parse: ParserFor(spec.Parser), f: f, inode: inodeOf(fi)}
+	tf := &tailedFile{path: p, spec: spec, parse: parserForFile(spec.Parser, p), f: f, inode: inodeOf(fi), ctr: spec.Container}
+	if spec.Parser == ParserDockerJSON {
+		if c, ok := containerOfLog(p); ok {
+			tf.ctr, tf.image = c.Name, c.Image
+		}
+	}
 	switch pos, ok := s.positions.File(p); {
 	case ok && pos.Inode == tf.inode && pos.Offset <= fi.Size():
 		tf.offset = pos.Offset // resume
@@ -308,6 +338,15 @@ func (s *FileSource) emit(ctx context.Context, tf *tailedFile, line []byte, cons
 	e := tf.parse(msg)
 	e.Source = tf.spec.Source
 	e.Path = tf.path
+	if tf.ctr != "" {
+		if e.Fields == nil {
+			e.Fields = map[string]string{}
+		}
+		e.Fields["container"] = tf.ctr
+		if tf.image != "" {
+			e.Fields["image"] = tf.image
+		}
+	}
 	pos := Position{Inode: tf.inode, Offset: tf.offset}
 	path, positions := tf.path, s.positions
 	e.ack = func() { positions.SetFile(path, pos) }

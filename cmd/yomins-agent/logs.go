@@ -16,10 +16,6 @@ func startLogPipeline(ctx context.Context, cfg *config.Config, hostname, agentID
 	if cfg.Logs != "auto" || cfg.Server == "" || cfg.Token == "" {
 		return nil
 	}
-	allow := cfg.LogAllow
-	if len(allow) == 0 {
-		allow = logs.DefaultAllow
-	}
 	redactor, err := logs.NewRedactor(cfg.LogRedact)
 	if err != nil {
 		slog.Error("logs: redaction rules invalid, logs not collected", "error", err)
@@ -27,12 +23,17 @@ func startLogPipeline(ctx context.Context, cfg *config.Config, hostname, agentID
 	}
 
 	plan := logs.Discover(cfg.LogPaths, cfg.LogExclude)
+	allow := cfg.LogAllow
+	if len(allow) == 0 {
+		allow = append(append([]string{}, logs.DefaultAllow...), plan.ContainerAllow...)
+	}
 	positions := logs.LoadPositions(cfg.StateDir)
 	stats := logs.NewStats()
 
 	fileSource := logs.NewFileSource(plan.Files, allow, positions)
 	stats.Watch(fileSource.Watched)
 	stats.WatchDenied(fileSource.Denied)
+	stats.WatchOutside(fileSource.Outside)
 	sources := []logs.Source{fileSource}
 	if plan.Journal {
 		sources = append(sources, logs.NewJournalSource(nil, positions))

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/yominsops/yomins-agent/internal/config"
+	"github.com/yominsops/yomins-agent/internal/logs"
 )
 
 // Modes of YOMINS_REMOTE_CONFIG.
@@ -107,7 +108,12 @@ func Validate(c Config) error {
 				return fmt.Errorf("redact pattern %q: %w", p, err)
 			}
 		}
-		for _, g := range append(append([]string{}, c.Logs.Paths...), c.Logs.Exclude...) {
+		for _, g := range c.Logs.Paths {
+			if _, glob := logs.SplitTyped(g); !filepath.IsAbs(glob) {
+				return errors.New("log paths must be absolute")
+			}
+		}
+		for _, g := range c.Logs.Exclude {
 			if !filepath.IsAbs(g) {
 				return errors.New("log paths must be absolute")
 			}

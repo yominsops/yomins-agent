@@ -75,7 +75,12 @@ func TestValidate(t *testing.T) {
 	if err := Validate(sample()); err != nil {
 		t.Fatal(err)
 	}
+	if err := Validate(Config{Logs: &LogsConfig{Paths: []string{"nginx:/srv/edge/logs/*.log"}}}); err != nil {
+		t.Errorf("a path naming its source: %v", err)
+	}
 	for _, c := range []Config{
+		{Logs: &LogsConfig{Paths: []string{"nginx:relative/*.log"}}},
+		{Logs: &LogsConfig{Exclude: []string{"nginx:/srv/*.log"}}},
 		{Interval: ptr("1s")},
 		{Logs: &LogsConfig{Redact: []string{"("}}},
 		{Logs: &LogsConfig{Paths: []string{"relative/*.log"}}},

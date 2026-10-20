@@ -19,6 +19,7 @@ type Stats struct {
 	lastShip time.Time
 	watchers []func() int
 	deniers  []func() int
+	outsides []func() int
 	derived  *lineMetrics
 }
 
@@ -39,6 +40,13 @@ func (s *Stats) WatchDenied(f func() int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deniers = append(s.deniers, f)
+}
+
+// WatchOutside registers a function reporting how many files lie outside the allow list.
+func (s *Stats) WatchOutside(f func() int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.outsides = append(s.outsides, f)
 }
 
 func (s *Stats) shipped(batch []Entry, n int) {
@@ -101,7 +109,12 @@ func (s *Stats) Collect(context.Context) ([]metrics.MetricPoint, error) {
 	for _, f := range s.deniers {
 		denied += f()
 	}
+	outside := 0
+	for _, f := range s.outsides {
+		outside += f()
+	}
 	pts = append(pts,
+		metrics.MetricPoint{Name: "agent_logs_files_outside_allow", Help: "Log files matched by the configured paths that lie outside the agent's allow list (YOMINS_LOG_ALLOW)", Type: metrics.Gauge, Value: float64(outside)},
 		metrics.MetricPoint{Name: "agent_logs_files_watched", Help: "Log files followed now", Type: metrics.Gauge, Value: float64(watched)},
 		metrics.MetricPoint{Name: "agent_logs_files_denied", Help: "Log files found that the agent may not read (re-run the installer)", Type: metrics.Gauge, Value: float64(denied)},
 	)
