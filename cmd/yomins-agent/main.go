@@ -229,6 +229,7 @@ func allCollectors(cfg *config.Config) []collector.Collector {
 			collector.NewSystemdCollector(),
 			collector.NewProcessGroupsCollector(10),
 			collector.Every(6*time.Hour, collector.NewUpdatesCollector(paths, cfg.StateDir)),
+			collector.Every(5*time.Minute, collector.NewPostureCollector(paths)),
 			collector.Every(time.Hour, collector.NewCertsCollector(paths, nil)),
 		)
 	}

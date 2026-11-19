@@ -64,6 +64,18 @@ check(count("auth.sudo", lambda e: actor(e).get("user") == "alice") >= 1, "auth.
 check(count("system.user_created", lambda e: actor(e).get("user") == "e2ebob"
             or "e2ebob" in json.dumps(e)) >= 1, "system.user_created e2ebob")
 check(count("system.config_modified", lambda e: "sshd_config" in json.dumps(e)) >= 1, "system.config_modified sshd_config")
+def tagged(*tags):
+    return lambda e: all(t in (e.get("tags") or []) for t in tags)
+
+
+check(count("system.persistence_changed", tagged("authorized_keys", "modified")) >= 1, "system.persistence_changed authorized_keys")
+check(count("system.persistence_changed", tagged("cron", "added")) >= 1, "system.persistence_changed cron")
+check(count("system.config_modified", tagged("sudoers", "added")) >= 1, "system.config_modified sudoers.d")
+check(re.search(r'^security_ssh_option\{[^}]*option="passwordauthentication"[^}]*value="yes"', metrics, re.M) is not None
+      or re.search(r'^security_ssh_option\{[^}]*value="yes"[^}]*option="passwordauthentication"', metrics, re.M) is not None,
+      "security_ssh_option passwordauthentication=yes")
+check(re.search(r'^security_accounts\{[^}]*kind="uid0_extra"', metrics, re.M) is not None, "security_accounts")
+check(re.search(r'^security_firewall_enabled', metrics, re.M) is not None, "security_firewall_enabled")
 check(count("network.connection_open", lambda e: (e.get("network") or {}).get("local_port") == 2222) >= 1,
       "network.connection_open :2222")
 

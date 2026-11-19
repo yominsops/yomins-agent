@@ -24,16 +24,19 @@ const (
 	EventProcessReverseShell EventType = "process.reverse_shell"
 
 	// network.*
-	EventNetworkConnectionOpen  EventType = "network.connection_open"
-	EventNetworkScanDetected    EventType = "network.scan_detected"
-	EventNetworkSuspiciousPort  EventType = "network.suspicious_port"
+	EventNetworkConnectionOpen EventType = "network.connection_open"
+	EventNetworkScanDetected   EventType = "network.scan_detected"
+	EventNetworkSuspiciousPort EventType = "network.suspicious_port"
 
 	// system.*
-	EventSystemReboot        EventType = "system.reboot"
-	EventSystemOOMKiller     EventType = "system.oom_killer"
-	EventSystemUserCreated   EventType = "system.user_created"
-	EventSystemUserDeleted   EventType = "system.user_deleted"
+	EventSystemReboot         EventType = "system.reboot"
+	EventSystemOOMKiller      EventType = "system.oom_killer"
+	EventSystemUserCreated    EventType = "system.user_created"
+	EventSystemUserDeleted    EventType = "system.user_deleted"
 	EventSystemConfigModified EventType = "system.config_modified"
+	// EventSystemPersistence: a file that keeps an intruder in changed —
+	// authorized_keys, cron, a systemd unit, ld.so.preload, rc.local, shell profiles.
+	EventSystemPersistence EventType = "system.persistence_changed"
 )
 
 // Category groups events by broad domain.

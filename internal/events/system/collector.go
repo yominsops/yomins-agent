@@ -76,6 +76,7 @@ func (c *Collector) Run(ctx context.Context, out chan<- events.Event) error {
 
 	if c.cfg.MonitorConfigFiles {
 		go c.pollFileState(ctx, out)
+		go c.pollPersistence(ctx, out)
 	}
 
 	<-ctx.Done()

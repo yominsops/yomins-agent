@@ -25,6 +25,9 @@ var knownLogs = []FileSpec{
 	{Source: "syslog", Parser: ParserSyslog, Globs: []string{"/var/log/syslog", "/var/log/messages", "/var/log/daemon.log", "/var/log/user.log"}},
 	{Source: "auth", Parser: ParserSyslog, Globs: []string{"/var/log/auth.log", "/var/log/secure"}},
 	{Source: "kernel", Parser: ParserSyslog, Globs: []string{"/var/log/kern.log"}},
+	// auditd (the RHEL family has it on by default): logins, privilege use,
+	// SELinux denials (type=AVC).
+	{Source: "audit", Parser: ParserPlain, Globs: []string{"/var/log/audit/audit.log"}},
 	{Source: "cron", Parser: ParserSyslog, Globs: []string{"/var/log/cron.log", "/var/log/cron"}},
 	// packages: dnf5.log on Fedora 41+, zypp/history on SUSE.
 	{Source: "packages", Parser: ParserPlain, Globs: []string{"/var/log/dpkg.log", "/var/log/dnf.log", "/var/log/dnf5.log", "/var/log/yum.log", "/var/log/zypp/history", "/var/log/apt/history.log", "/var/log/unattended-upgrades/unattended-upgrades.log"}},

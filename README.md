@@ -27,7 +27,7 @@ The agent identifies itself with a project-scoped token. The server resolves the
 
 ## Supported distributions
 
-The service install (install.sh, systemd) is tested end to end on every pull request (`test/distro/`, CI job `distro`): the agent is installed in a container booted with systemd and has to report SSH logins with and without a terminal, failed logins, brute force, sudo, a new user, an edited `sshd_config`, a new listening port, pending updates and the last update time.
+The service install (install.sh, systemd) is tested end to end on every pull request (`test/distro/`, CI job `distro`): the agent is installed in a container booted with systemd and has to report SSH logins with and without a terminal, failed logins (passwords and a rejected key), brute force, sudo, a new user, an edited `sshd_config`, an added key, cron job and sudoers drop-in, a new listening port, the security posture metrics, pending updates and the last update time.
 
 | Family | Tested | Package manager | sshd and sudo messages |
 |---|---|---|---|
@@ -162,6 +162,24 @@ Read from `/proc` and `/sys` on every push, except where noted.
 | `system_updates_pending{kind}`, `system_reboot_required` | Gauge | Every 6 h: pending updates (all / security) from the package manager's cache — apt, dnf 4/5, zypper, yum (no `security` on yum); reboot needed: `/run/reboot-required`, a newer kernel in `/boot`, `dnf needs-restarting -r`, `zypper needs-rebooting`. Omitted when the package manager does not answer |
 | `tls_certificate_expiry_timestamp_seconds{path,subject,issuer}` | Gauge | Hourly: certbot certificates and those nginx, Apache, Dovecot, Exim, Postfix are configured with |
 
+### Security posture (Linux)
+
+Every 5 minutes. A metric is left out where its subject does not exist on the host (no SELinux on Debian, no ufw on RHEL), so `0` always means "there and off".
+
+| Metric | Description | Source |
+|---|---|---|
+| `security_selinux_mode{mode}` | 1 for the current mode: `enforcing`, `permissive`, `disabled` | `/sys/fs/selinux/enforce`, `/etc/selinux/config` |
+| `security_apparmor_enabled`, `security_apparmor_profiles{mode}` | AppArmor on; loaded profiles by `enforce` / `complain` | `/sys/module/apparmor`, `/sys/kernel/security/apparmor/profiles` |
+| `security_firewall_active{tool}`, `security_firewall_enabled` | Each firewall found (`firewalld`, `ufw`, `nftables`, `iptables`, `iptables-persistent`, `csf`), and whether any is on | systemd units; `ENABLED=` in `/etc/ufw/ufw.conf`; lfd for CSF |
+| `security_auditd_active` | The audit daemon runs | `auditd.service` |
+| `security_auto_updates_enabled{method}` | Security updates install by themselves: `unattended-upgrades` (APT::Periodic::Unattended-Upgrade), `dnf-automatic` (an enabled timer that applies updates) | apt.conf.d, dnf automatic.conf |
+| `security_kernel_livepatches` | Kernel live patches loaded (kpatch, Canonical Livepatch, kGraft; KernelCare is `kernelcare_info`) | `/sys/kernel/livepatch` |
+| `security_ssh_option{option,value}` | Effective `permitrootlogin`, `passwordauthentication`, `kbdinteractiveauthentication`, `pubkeyauthentication`, `permitemptypasswords`, `x11forwarding` outside Match blocks — first value wins, `Include` read in place, OpenSSH's default when unset | `/etc/ssh/sshd_config` and its includes |
+| `security_accounts{kind}` | `uid0_extra`: accounts besides root with UID 0; `empty_password`: accounts with an empty password field | `/etc/passwd`, `/etc/shadow` |
+| `security_privileged_users{group}` | Members of `sudo`, `wheel`, `admin` (listed and by primary group) | `/etc/group`, `/etc/passwd` |
+| `security_ld_preload` | 1 when `/etc/ld.so.preload` names libraries — a common rootkit trick | |
+| `security_kernel_tainted` | The kernel's taint flags (non-zero after an out-of-tree or unsigned module, a crash) | `/proc/sys/kernel/tainted` |
+
 ### Integrations (Linux)
 
 Each integration finds its service and reports `agent_integration_status{integration,instance,status}` (`ok`, `unconfigured` — the service runs but exposes no statistics, `error`). `YOMINS_DISABLE_INTEGRATIONS=true` turns them off.
@@ -235,14 +253,14 @@ Domain-specific payloads (`process`, `network`) are added for relevant event typ
 | Category | Events |
 |---|---|
 | `access_event` | All auth events (`login_success`, `login_failed`, `logout`, `sudo`) |
-| `threat_activity` | `auth.bruteforce_detected`, `auth.login_new_ip`, `process.suspicious`, `process.exec_tmp`, `process.reverse_shell`, `network.scan_detected`, `network.suspicious_port`, `system.user_created`, `system.user_deleted`, `system.config_modified` |
+| `threat_activity` | `auth.bruteforce_detected`, `auth.login_new_ip`, `process.suspicious`, `process.exec_tmp`, `process.reverse_shell`, `network.scan_detected`, `network.suspicious_port`, `system.user_created`, `system.user_deleted`, `system.config_modified`, `system.persistence_changed` |
 | `system_check` | Process lifecycle, listening ports, system events |
 
 | Severity | Events |
 |---|---|
 | `info` | login_success, logout, process.start/stop, network.connection_open |
 | `warning` | login_failed, sudo, process.high_cpu/memory, process.exec_tmp, auth.login_new_ip, network.suspicious_port, system.reboot/oom_killer, system.user_deleted |
-| `critical` | auth.bruteforce_detected, process.suspicious, process.reverse_shell, network.scan_detected, system.user_created, system.config_modified |
+| `critical` | auth.bruteforce_detected, process.suspicious, process.reverse_shell, network.scan_detected, system.user_created, system.config_modified, system.persistence_changed (authorized_keys, ld.so.preload; others `warning`) |
 
 ### Counts for alerting
 
@@ -307,7 +325,10 @@ Ports in LISTEN state at agent startup are the baseline. Only new ports emit eve
 | `system.oom_killer` | Kernel OOM killer kills a process | `/dev/kmsg` (requires `CAP_SYSLOG` or root) |
 | `system.user_created` | A username not present in the snapshot appears in `/etc/passwd` | `/etc/passwd` polled every 30 s; state in `<state-dir>/passwd_snapshot.json` |
 | `system.user_deleted` | A username present in the snapshot disappears from `/etc/passwd` | `/etc/passwd` polled every 30 s |
-| `system.config_modified` | SHA-256 hash of a monitored file changes | `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/sudoers`, `/etc/ssh/sshd_config` polled every 30 s; state in `<state-dir>/file_state.json` |
+| `system.config_modified` | SHA-256 hash of a monitored file changes, or a drop-in is added, changed or removed | `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/sudoers`, `/etc/ssh/sshd_config`; drop-ins `/etc/sudoers.d/*`, `/etc/ssh/sshd_config.d/*`, `/etc/pam.d/*`, `/etc/security/access.conf` — polled every 30 s |
+| `system.persistence_changed` | A file that keeps an intruder in is added, changed or removed. `context.reason` is the path; `tags` carry the kind (`authorized_keys`, `ld_preload`, `cron`, `systemd_unit`, `rc_local`, `shell_profile`) and `added` / `modified` / `removed`; for authorized_keys the actor is the account it lets in | `/root/.ssh/authorized_keys`, `/home/*/.ssh/authorized_keys`; `/etc/ld.so.preload`; `/etc/crontab`, `/etc/cron.{d,hourly,daily,weekly,monthly}/*`, `/var/spool/cron/*` (RHEL), `/var/spool/cron/crontabs/*` (Debian); `/etc/systemd/system/*.{service,timer,socket,path}` and drop-ins; `/etc/rc.local`, `/etc/rc.d/rc.local`; `/etc/profile`, `/etc/profile.d/*`, `/etc/bash.bashrc`, `/etc/bashrc`, `/etc/environment` — polled every 30 s, up to 5000 files |
+
+The drop-ins and persistence files start from what is on the host when the agent (or a version that adds a group) first sees them, and changes made while the agent was stopped are reported when it starts. A change made within 10 minutes of a package database write (dpkg, rpm) — package upgrades rewrite pam.d, cron.daily and profile.d — is still reported, with severity `info`, low confidence and the tag `package_manager`. State is in `<state-dir>/persistence_state.json`.
 
 > **Permissions note:** the service unit grants `CAP_DAC_READ_SEARCH`, which lets the agent read these files whatever their mode — `/etc/shadow` is `000` on the RHEL family, `/etc/ssh/sshd_config` `600`. Without it (an older unit, a container) unreadable files are skipped.
 
@@ -351,6 +372,7 @@ Off by default. With `YOMINS_LOGS=auto` the agent finds the logs of the software
 | Source | Files | Parser |
 |---|---|---|
 | `syslog`, `auth`, `kernel`, `cron` | `/var/log/syslog`, `messages`, `auth.log`, `secure`, `kern.log`, `cron.log` | syslog |
+| `audit` | `/var/log/audit/audit.log` (auditd: logins, privilege use, SELinux denials) | plain |
 | `packages` | `dpkg.log`, `apt/history.log`, `dnf.log`, `dnf5.log`, `yum.log`, `zypp/history`, unattended-upgrades | plain |
 | `firewall` | `/var/log/firewalld` | plain |
 | `nginx` | `/var/log/nginx/*access*.log`, `*analytics*.log`, `*error*.log` | nginx access (combined, JSON, yomins `full`) / error |

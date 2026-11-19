@@ -88,6 +88,12 @@ useradd -M e2ebob
 echo "# e2e" >> /etc/ssh/sshd_config
 /usr/sbin/sshd -p 2222
 
+log "persistence: a key, a cron job, a sudoers drop-in"
+ssh-keygen -q -t ed25519 -N '' -f /root/intruder_key
+cat /root/intruder_key.pub >> /home/alice/.ssh/authorized_keys
+mkdir -p /etc/cron.d && echo '*/5 * * * * root /tmp/.x' > /etc/cron.d/e2e-intruder
+echo 'e2ebob ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/e2ebob && chmod 440 /etc/sudoers.d/e2ebob
+
 sleep 35
 log "agent journal"
 journalctl -u yomins-agent --no-pager -o cat | grep -E 'level=(WARN|ERROR)|auth:|logs: collecting' | head -40
