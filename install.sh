@@ -26,6 +26,7 @@ AGENT_TOKEN=""
 AGENT_SERVER="https://ingest.yominsops.com"
 AGENT_INTERVAL="60s"
 AGENT_VERSION=""            # resolved to latest if empty
+LOCAL_BINARY=""             # --binary: install this file instead of downloading a release
 SKIP_CONFIRM=false
 ALLOW_HTTP=false            # dev/testing only: bypass HTTPS requirement
 IS_UPGRADE=false            # set to true when upgrading an existing install
@@ -67,6 +68,8 @@ Options:
   --server <URL>        Ingestion endpoint URL (default: ${AGENT_SERVER})
   --interval <DURATION> Metrics push interval (default: ${AGENT_INTERVAL})
   --version <VERSION>   Agent version to install (default: latest)
+  --binary <PATH>       Install this agent binary instead of downloading a
+                        release (tests, hosts without access to GitHub)
   --yes                 Skip confirmation prompt
   --uninstall           Remove the agent, service, config, and state from this system
   --help                Show this help and exit
@@ -80,6 +83,7 @@ parse_args() {
             --server)     AGENT_SERVER="$2";   shift 2 ;;
             --interval)   AGENT_INTERVAL="$2"; shift 2 ;;
             --version)    AGENT_VERSION="$2";  shift 2 ;;
+            --binary)     LOCAL_BINARY="$2";   shift 2 ;;
             --yes|-y)        SKIP_CONFIRM=true;    shift   ;;
             --allow-http)    ALLOW_HTTP=true;      shift   ;;
             --uninstall)     DO_UNINSTALL=true;    shift   ;;
@@ -528,9 +532,16 @@ main() {
     require_cmd install
 
     detect_platform
-    resolve_version
-    confirm
-    download_binary
+    if [[ -n "$LOCAL_BINARY" ]]; then
+        [[ -f "$LOCAL_BINARY" ]] || die "No such binary: ${LOCAL_BINARY}"
+        AGENT_VERSION="${AGENT_VERSION:-local}"
+        TMP_BIN="$LOCAL_BINARY"
+        confirm
+    else
+        resolve_version
+        confirm
+        download_binary
+    fi
     ensure_user
     migrate_state_dir
     install_binary

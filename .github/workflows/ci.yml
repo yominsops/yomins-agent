@@ -38,3 +38,36 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+
+  # The agent installed with install.sh on each distribution, in a container
+  # booted with systemd; test/distro/check.py lists what it must report.
+  distro:
+    name: Distro (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "debian:12", id: debian, rsyslog: "no" }
+          - { image: "debian:13", id: debian, rsyslog: "no" }
+          - { image: "ubuntu:22.04", id: ubuntu, rsyslog: "yes" }
+          - { image: "ubuntu:24.04", id: ubuntu, rsyslog: "yes" }
+          - { image: "ubuntu:25.10", id: ubuntu, rsyslog: "yes" }
+          - { image: "almalinux:8", id: almalinux, rsyslog: "yes" }
+          - { image: "almalinux:9", id: almalinux, rsyslog: "yes" }
+          - { image: "almalinux:10", id: almalinux, rsyslog: "yes" }
+          - { image: "rockylinux/rockylinux:9", id: rocky, rsyslog: "yes" }
+          - { image: "fedora:43", id: fedora, rsyslog: "no" }
+          - { image: "amazonlinux:2023", id: amzn, rsyslog: "no" }
+          - { image: "opensuse/leap:15.6", id: opensuse-leap, rsyslog: "no" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: End-to-end test
+        run: test/distro/run.sh "${{ matrix.image }}" "${{ matrix.id }}" "${{ matrix.rsyslog }}"
