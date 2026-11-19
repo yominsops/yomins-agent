@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -19,6 +22,10 @@ import (
 
 type realInfoReader struct {
 	virtOverride string
+
+	pkgMu    sync.Mutex
+	pkgTimes *PackageUpdateTimes
+	pkgAt    time.Time
 }
 
 func newRealInfoReader(virtOverride string) InfoReader {
@@ -64,21 +71,35 @@ func (r *realInfoReader) CPUInfoWithContext(ctx context.Context) (*CPUInfoStat, 
 }
 
 func (r *realInfoReader) PackageUpdateTimesWithContext(ctx context.Context) (*PackageUpdateTimes, error) {
-	put := &PackageUpdateTimes{}
-
-	// Try dpkg logs first (Debian/Ubuntu).
-	kernelTS, softwareTS := parseDpkgLogs()
-	if kernelTS > 0 || softwareTS > 0 {
-		put.LastKernelUpdate = kernelTS
-		put.LastSoftwareUpdate = softwareTS
-		return put, nil
+	r.pkgMu.Lock()
+	defer r.pkgMu.Unlock()
+	// The package database changes rarely and rpm -qa reads all of it, so
+	// the answer is kept for a while instead of being rebuilt on every push.
+	if r.pkgTimes != nil && time.Since(r.pkgAt) < packageTimesTTL {
+		return r.pkgTimes, nil
 	}
-
-	// Fallback: rpm (RHEL/CentOS/AlmaLinux/Rocky).
-	put.LastKernelUpdate = rpmLastUpdate(ctx, true)
-	put.LastSoftwareUpdate = rpmLastUpdate(ctx, false)
+	put := &PackageUpdateTimes{}
+	if _, err := exec.LookPath("dpkg"); err == nil {
+		// Debian/Ubuntu: dpkg.log names each install and upgrade; once it
+		// has been rotated away, the package lists' times say the same.
+		put.LastKernelUpdate, put.LastSoftwareUpdate = parseDpkgLogs()
+		if put.LastSoftwareUpdate == 0 {
+			put.LastKernelUpdate, put.LastSoftwareUpdate = dpkgInfoTimes("/var/lib/dpkg/info")
+		}
+	} else if _, err := exec.LookPath("rpm"); err == nil {
+		// RHEL and its rebuilds, Fedora, Amazon Linux, SUSE, CloudLinux.
+		out, err := exec.CommandContext(ctx, "rpm", "-qa", "--qf", "%{INSTALLTIME} %{NAME}\\n").Output()
+		if err != nil {
+			return put, nil // not kept: the next push asks again
+		}
+		put.LastKernelUpdate, put.LastSoftwareUpdate = rpmInstallTimes(out)
+	}
+	r.pkgTimes, r.pkgAt = put, time.Now()
 	return put, nil
 }
+
+// packageTimesTTL is how long the last package update times are reused.
+const packageTimesTTL = 10 * time.Minute
 
 func (r *realInfoReader) KernelCareInfoWithContext(ctx context.Context) (*KernelCareInfoStat, error) {
 	if _, err := exec.LookPath("kcarectl"); err != nil {
@@ -431,40 +452,51 @@ func parseDpkgLogs() (kernelTS, softwareTS int64) {
 	return kernelTS, softwareTS
 }
 
-// rpmLastUpdate returns the Unix timestamp of the most recent rpm package update.
-// If kernelOnly is true, only the kernel package is queried.
-func rpmLastUpdate(ctx context.Context, kernelOnly bool) int64 {
-	args := []string{"-qa", "--last"}
-	if kernelOnly {
-		args = append(args, "kernel")
+// reKernelRPM matches the kernel packages of the RPM distributions: kernel
+// (RHEL 7, CloudLinux), kernel-core (RHEL 8+, Fedora), kernel-default (SUSE),
+// kernel-uek (Oracle), kernel-lt/ml (ELRepo), kernel-rt.
+var reKernelRPM = regexp.MustCompile(`^kernel(-(core|default|uek|lt|ml|rt))?$`)
+
+// rpmInstallTimes reads `rpm -qa --qf '%{INSTALLTIME} %{NAME}\n'`. A number
+// is used rather than `rpm --last`, whose date follows the locale
+// ("Thu 19 Nov 2026 01:22:25 PM UTC" with en_US.UTF-8).
+func rpmInstallTimes(out []byte) (kernelTS, softwareTS int64) {
+	for _, line := range strings.Split(string(out), "\n") {
+		ts, name, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		t, err := strconv.ParseInt(ts, 10, 64)
+		if err != nil {
+			continue
+		}
+		if t > softwareTS {
+			softwareTS = t
+		}
+		if reKernelRPM.MatchString(name) && t > kernelTS {
+			kernelTS = t
+		}
 	}
-	out, err := exec.CommandContext(ctx, "rpm", args...).Output()
-	if err != nil {
-		return 0
-	}
-	// First non-empty line; format: "kernel-5.14.0-362.el9.x86_64  Wed Mar 10 05:32:11 2024"
-	line := firstLine(out)
-	if line == "" {
-		return 0
-	}
-	// Find the date portion after the package name (separated by whitespace).
-	// The date is the last 4 fields: "Wed Mar 10 05:32:11 2024"
-	fields := strings.Fields(line)
-	if len(fields) < 5 {
-		return 0
-	}
-	dateStr := strings.Join(fields[len(fields)-5:], " ")
-	t, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", dateStr, time.Local)
-	if err != nil {
-		return 0
-	}
-	return t.Unix()
+	return kernelTS, softwareTS
 }
 
-func firstLine(b []byte) string {
-	idx := bytes.IndexByte(b, '\n')
-	if idx < 0 {
-		return strings.TrimSpace(string(b))
+// dpkgInfoTimes returns the newest modification times of the package file
+// lists in /var/lib/dpkg/info: dpkg rewrites a package's list when it
+// installs or upgrades it.
+func dpkgInfoTimes(dir string) (kernelTS, softwareTS int64) {
+	lists, _ := filepath.Glob(filepath.Join(dir, "*.list"))
+	for _, l := range lists {
+		fi, err := os.Stat(l)
+		if err != nil {
+			continue
+		}
+		t := fi.ModTime().Unix()
+		if t > softwareTS {
+			softwareTS = t
+		}
+		if strings.HasPrefix(filepath.Base(l), "linux-image-") && t > kernelTS {
+			kernelTS = t
+		}
 	}
-	return strings.TrimSpace(string(b[:idx]))
+	return kernelTS, softwareTS
 }
