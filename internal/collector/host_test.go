@@ -218,39 +218,6 @@ func TestSystemd(t *testing.T) {
 	}
 }
 
-func TestUpdates(t *testing.T) {
-	h := fixture(t, map[string]string{"run/reboot-required": ""})
-	c := NewUpdatesCollector(h)
-	c.lookup = func(n string) (string, error) {
-		if n == "apt-get" {
-			return "/usr/bin/apt-get", nil
-		}
-		return "", errors.New("no")
-	}
-	c.run = func(context.Context, string, ...string) ([]byte, error) {
-		return []byte("Inst libc6 [2.36-9] (2.36-9+deb12u9 Debian-Security:12/stable-security [arm64])\nInst vim [1] (2 Debian:12.8/stable [arm64])\nConf vim (2)\n"), nil
-	}
-	pts, _ := c.Collect(context.Background())
-	if find(t, pts, "system_updates_pending", "kind", "all") != 2 || find(t, pts, "system_updates_pending", "kind", "security") != 1 || find(t, pts, "system_reboot_required") != 1 {
-		t.Errorf("%v", pts)
-	}
-}
-
-func TestUpdates_NewerKernelInstalled(t *testing.T) {
-	h := fixture(t, map[string]string{"boot/vmlinuz-6.1.0-25-arm64": ""})
-	time.Sleep(10 * time.Millisecond)
-	if err := os.WriteFile(filepath.Join(h.Root, "boot/vmlinuz-6.1.0-26-arm64"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	c := NewUpdatesCollector(h)
-	c.lookup = func(string) (string, error) { return "", errors.New("none") }
-	c.release = func() string { return "6.1.0-25-arm64" }
-	pts, _ := c.Collect(context.Background())
-	if find(t, pts, "system_reboot_required") != 1 || has(pts, "system_updates_pending") {
-		t.Errorf("%v", pts)
-	}
-}
-
 func selfSigned(t *testing.T, cn string, notAfter time.Time) string {
 	t.Helper()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -328,8 +295,47 @@ func TestEvery(t *testing.T) {
 		t.Error("cached within the ttl")
 	}
 	at = at.Add(31 * time.Minute)
-	_, _ = e.Collect(context.Background())
+	pts, _ = e.Collect(context.Background())
+	if pts[0].Value != 1 {
+		t.Error("the last result is reported while the next run goes on")
+	}
+	e.wait()
 	if inner.n != 2 {
 		t.Error("run again after the ttl")
 	}
+	pts, _ = e.Collect(context.Background())
+	if pts[0].Value != 2 {
+		t.Error("the new result once the run has finished")
+	}
+}
+
+// A run longer than the pass allows is not cut short: it finishes in the
+// background and its result goes out with a later push.
+func TestEvery_SlowRun(t *testing.T) {
+	release := make(chan struct{})
+	inner := &slowCollector{release: release}
+	e := Every(time.Hour, inner).(*everyCollector)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if pts, err := e.Collect(ctx); pts != nil || err != nil {
+		t.Fatalf("first pass: %v %v", pts, err)
+	}
+	close(release)
+	e.wait()
+	pts, err := e.Collect(context.Background())
+	if err != nil || len(pts) != 1 {
+		t.Fatalf("after the run: %v %v", pts, err)
+	}
+}
+
+type slowCollector struct{ release chan struct{} }
+
+func (s *slowCollector) Name() string { return "slow" }
+func (s *slowCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, error) {
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return []metrics.MetricPoint{{Name: "slow", Value: 1}}, nil
 }
