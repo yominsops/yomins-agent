@@ -25,6 +25,21 @@ The agent runs two independent pipelines:
 
 The agent identifies itself with a project-scoped token. The server resolves the token to a project, appends authoritative labels (`project_id`, `customer_id`), and stores the data. **The agent never controls project identity** — that is always enforced server-side.
 
+## Supported distributions
+
+The service install (install.sh, systemd) is tested end to end on every pull request (`test/distro/`, CI job `distro`): the agent is installed in a container booted with systemd and has to report SSH logins with and without a terminal, failed logins, brute force, sudo, a new user, an edited `sshd_config`, a new listening port, pending updates and the last update time.
+
+| Family | Tested | Package manager | sshd and sudo messages |
+|---|---|---|---|
+| Debian | 12, 13 | apt | journal (no rsyslog by default) |
+| Ubuntu | 22.04, 24.04, 25.10 | apt | journal (also in `auth.log`) |
+| AlmaLinux, Rocky Linux | 8, 9, 10 / 9 | dnf 4 | journal (also in `secure`) |
+| Fedora | 43 | dnf 5 | journal |
+| Amazon Linux | 2023 | dnf 4 | journal |
+| openSUSE Leap | 15.6 | zypper | journal |
+
+Oracle Linux, CentOS Stream and CloudLinux 8+ are RHEL rebuilds and take the same paths; CloudLinux 7 and CentOS 7 (yum, kernel 3.10) report pending updates without the security count and have no pressure (PSI) metrics. Run one locally with `test/distro/run.sh almalinux:9 almalinux yes` (needs Docker, Go, python3).
+
 ## Metrics collected
 
 ### CPU
@@ -107,8 +122,8 @@ Static/semi-static metadata collected once per push cycle. Each metric is omitte
 | `system_info` — distribution | `/etc/os-release` | — |
 | `system_info` — kernel version | `/proc/version` via gopsutil | — |
 | `system_info` — virtualization | `systemd-detect-virt --vm`, fallback `/sys/class/dmi/id/sys_vendor` | `systemd-detect-virt` (optional; falls back to sysfs) |
-| `system_last_*_update_timestamp` | `/var/log/dpkg.log{,.1}` on Debian/Ubuntu | — |
-| `system_last_*_update_timestamp` | `rpm -qa --last` on RHEL/CentOS/AlmaLinux | `rpm` (must be installed) |
+| `system_last_*_update_timestamp` | `/var/log/dpkg.log{,.1}` on Debian/Ubuntu, or the times of `/var/lib/dpkg/info/*.list` once the log has rotated | — |
+| `system_last_*_update_timestamp` | `rpm -qa --qf '%{INSTALLTIME}'` on RPM distributions (RHEL and rebuilds, Fedora, Amazon Linux, SUSE, CloudLinux); kernel = `kernel`, `kernel-core`, `kernel-default`, `kernel-uek` | `rpm` |
 | `kernelcare_info` | `kcarectl --version` | `kcarectl` (KernelCare agent; omitted if not installed) |
 | `cpu_info` | `/proc/cpuinfo` via gopsutil | — |
 | `memory_hardware_info` — total | `/proc/meminfo` | — |
@@ -144,7 +159,7 @@ Read from `/proc` and `/sys` on every push, except where noted.
 | `systemd_units_failed`, `systemd_unit_failed{unit}`, `systemd_system_degraded` | Gauge | Failed units |
 | `systemd_service_active{unit,state}`, `systemd_service_restarts_total{unit}` | Gauge, Counter | The usual services (web, PHP, databases, mail, Docker, SSH, cron) |
 | `process_group_cpu_percent`, `process_group_memory_bytes`, `process_group_count` | Gauge | Top 10 process names by CPU and by memory (`process`) |
-| `system_updates_pending{kind}`, `system_reboot_required` | Gauge | Every 6 h: pending updates (all / security) via apt or dnf; reboot needed |
+| `system_updates_pending{kind}`, `system_reboot_required` | Gauge | Every 6 h: pending updates (all / security) from the package manager's cache — apt, dnf 4/5, zypper, yum (no `security` on yum); reboot needed: `/run/reboot-required`, a newer kernel in `/boot`, `dnf needs-restarting -r`, `zypper needs-rebooting`. Omitted when the package manager does not answer |
 | `tls_certificate_expiry_timestamp_seconds{path,subject,issuer}` | Gauge | Hourly: certbot certificates and those nginx, Apache, Dovecot, Exim, Postfix are configured with |
 
 ### Integrations (Linux)
@@ -237,21 +252,20 @@ The agent also counts the events it detects and pushes the counts with the metri
 
 | Event | Trigger | Data source |
 |---|---|---|
-| `auth.login_success` | User logs in via SSH or console | `/var/log/wtmp` (binary utmp) |
-| `auth.logout` | SSH or console session ends | `/var/log/wtmp` |
-| `auth.login_failed` | Failed authentication attempt | `/var/log/auth.log`, `/var/log/secure`, or systemd journal |
-| `auth.sudo` | `sudo` command executed | `/var/log/auth.log`, `/var/log/secure`, or systemd journal |
+| `auth.login_success` | User logs in via SSH (with or without a terminal: `ssh host cmd`, scp, Ansible) or on the console | sshd's `Accepted …` message; console logins from `/var/log/wtmp` |
+| `auth.logout` | SSH or console session ends | sshd's `session closed` message; console sessions from `/var/log/wtmp` |
+| `auth.login_failed` | Failed authentication attempt (IPv4 and IPv6); a user that does not exist counts once per connection | sshd's messages |
+| `auth.sudo` | `sudo` command executed | sudo's messages |
 | `auth.bruteforce_detected` | ≥ `--bruteforce-threshold` failed logins from the same IP+user within `--bruteforce-window` | derived from `auth.login_failed` |
 | `auth.login_new_ip` | Successful login from an IP not seen before for that user | derived from `auth.login_success`; state persisted in `<state-dir>/auth_last_ip.json` |
 
 The wtmp cursor is persisted to `<state-dir>/wtmp_cursor` so events missed during agent downtime are replayed on restart.
 
-On Debian 13 (trixie) the file is `/var/log/wtmp.db`; the agent falls back to that path automatically when `/var/log/wtmp` is absent.
+sshd's and sudo's messages are read from:
+1. the systemd journal, when the agent can read it (the service unit adds the `systemd-journal` group). Every systemd distribution keeps them there, with or without rsyslog, so this is the default everywhere. It follows sshd under both its names: `sshd`, and `sshd-session`/`sshd-auth` since OpenSSH 9.8 (Debian 13, Ubuntu 25.04+, Fedora 41+, RHEL 9.6+/10 and rebuilds);
+2. otherwise the file: `--auth-log-path` (default `/var/log/auth.log`, Debian/Ubuntu), else `/var/log/secure` (RHEL family) — e.g. in a container with the file mounted. A configured `--auth-log-path` is always read as a file.
 
-For `auth.login_failed` and `auth.sudo` the agent uses the first available source in this order:
-1. `--auth-log-path` (default: `/var/log/auth.log`) — used on Debian/Ubuntu with rsyslog/syslog-ng
-2. `/var/log/secure` — automatic fallback on RHEL/CentOS/AlmaLinux when `auth.log` is absent
-3. systemd journal via `journalctl` — automatic fallback on systems without a syslog file (modern Debian/Ubuntu without rsyslog); requires the service user to be in the `systemd-journal` group (configured automatically by the service unit)
+While sshd's messages are read, wtmp reports only console sessions, so an SSH login is reported once. Debian 13 records logins with wtmpdb (an SQLite database) and no longer writes `/var/log/wtmp`; SSH logins are reported from sshd's messages there too.
 
 ### process.*
 
@@ -295,7 +309,7 @@ Ports in LISTEN state at agent startup are the baseline. Only new ports emit eve
 | `system.user_deleted` | A username present in the snapshot disappears from `/etc/passwd` | `/etc/passwd` polled every 30 s |
 | `system.config_modified` | SHA-256 hash of a monitored file changes | `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/sudoers`, `/etc/ssh/sshd_config` polled every 30 s; state in `<state-dir>/file_state.json` |
 
-> **Systemd permissions note:** `/etc/shadow` requires the `shadow` group — the service unit adds it via `SupplementaryGroups=shadow`. `/etc/sudoers` (mode 440 `root:root`) and `/etc/ssh/sshd_config` on RHEL/CentOS (mode 600) are not readable by the service user; both are silently skipped when unreadable. Full coverage requires running the agent as root.
+> **Permissions note:** the service unit grants `CAP_DAC_READ_SEARCH`, which lets the agent read these files whatever their mode — `/etc/shadow` is `000` on the RHEL family, `/etc/ssh/sshd_config` `600`. Without it (an older unit, a container) unreadable files are skipped.
 
 ### Docker requirements for event collection
 
@@ -319,8 +333,8 @@ docker run -d \
 
 | Collector | Required flag/mount | Without it |
 |---|---|---|
-| Auth (login/logout) | `-v /var/log/wtmp:/var/log/wtmp:ro` (or `/var/log/wtmp.db` on Debian 13) | Single warning, collector disabled |
-| Auth (failed/sudo) | `-v /var/log/auth.log:/var/log/auth.log:ro` | Single warning, collector disabled |
+| Auth (console login/logout) | `-v /var/log/wtmp:/var/log/wtmp:ro` | Single warning, console sessions not reported |
+| Auth (SSH logins, failed logins, sudo) | `-v /var/log/auth.log:/var/log/auth.log:ro` (RHEL: `/var/log/secure`). The image has no `journalctl`: on hosts without rsyslog (Debian 12+, Fedora, Amazon Linux 2023) install rsyslog or the agent as a service | Single warning, collector disabled |
 | Process (host PIDs) | `--pid=host` | Container-scoped PIDs only (no error) |
 | Network (host sockets) | `--net=host` | Container network namespace only (no error) |
 | OOM killer | `--device /dev/kmsg:/dev/kmsg:r` + `CAP_SYSLOG` | Single warning, collector disabled |
@@ -337,7 +351,8 @@ Off by default. With `YOMINS_LOGS=auto` the agent finds the logs of the software
 | Source | Files | Parser |
 |---|---|---|
 | `syslog`, `auth`, `kernel`, `cron` | `/var/log/syslog`, `messages`, `auth.log`, `secure`, `kern.log`, `cron.log` | syslog |
-| `packages` | `dpkg.log`, `apt/history.log`, `dnf.log`, `yum.log`, unattended-upgrades | plain |
+| `packages` | `dpkg.log`, `apt/history.log`, `dnf.log`, `dnf5.log`, `yum.log`, `zypp/history`, unattended-upgrades | plain |
+| `firewall` | `/var/log/firewalld` | plain |
 | `nginx` | `/var/log/nginx/*access*.log`, `*analytics*.log`, `*error*.log` | nginx access (combined, JSON, yomins `full`) / error |
 | `apache` | `/var/log/apache2/*`, `/var/log/httpd/*` | combined / plain |
 | `php-fpm` | `/var/log/php*-fpm.log`, `/var/log/php-fpm*/` | PHP |
@@ -445,14 +460,14 @@ Configuration is accepted via CLI flags or environment variables. CLI flags take
 | `--disable-system-events` | `YOMINS_DISABLE_SYSTEM_EVENTS` | `false` | Disable system event collection only |
 | `--event-buffer-size` | `YOMINS_EVENT_BUFFER_SIZE` | `10000` | Maximum number of events held in memory before older events are dropped |
 | `--wtmp-path` | `YOMINS_WTMP_PATH` | `/var/log/wtmp` | Path to the wtmp file used for login/logout event collection |
-| `--auth-log-path` | `YOMINS_AUTH_LOG_PATH` | `/var/log/auth.log` | Path to the auth log file used for failed-login and sudo events; falls back to `/var/log/secure` then to systemd journal when the file does not exist |
+| `--auth-log-path` | `YOMINS_AUTH_LOG_PATH` | `/var/log/auth.log` | Auth log file for SSH and sudo events. By default the systemd journal is read when it can be; this file (then `/var/log/secure`) is the fallback. Set explicitly, the file is read instead of the journal |
 | `--suspicious-patterns` | `YOMINS_SUSPICIOUS_PATTERNS` | *(built-in defaults)* | Comma-separated regex patterns for suspicious process detection; replaces the built-in list |
 | `--bruteforce-threshold` | `YOMINS_BRUTEFORCE_THRESHOLD` | `5` | Number of failed logins from the same IP+user within the window to trigger `auth.bruteforce_detected` |
 | `--bruteforce-window` | `YOMINS_BRUTEFORCE_WINDOW` | `30s` | Sliding time window for counting brute-force attempts |
 | `--bruteforce-suppression` | `YOMINS_BRUTEFORCE_SUPPRESSION` | `2m` | Cooldown after a bruteforce event fires before another can be emitted for the same IP+user |
 | `--monitor-tmp-paths` | `YOMINS_MONITOR_TMP_PATHS` | `true` | Emit `process.exec_tmp` events for processes launched from `/tmp`, `/var/tmp`, or `/dev/shm` |
 | `--monitor-config-files` | `YOMINS_MONITOR_CONFIG_FILES` | `true` | Emit `system.config_modified` when critical config files change |
-| `--ignore-private-ip` | `YOMINS_IGNORE_PRIVATE_IP` | `true` | Ignore loopback and RFC-1918 addresses when tracking `auth.login_new_ip` |
+| `--ignore-private-ip` | `YOMINS_IGNORE_PRIVATE_IP` | `true` | Ignore loopback, RFC-1918, IPv6 unique-local and link-local addresses when tracking `auth.login_new_ip` |
 | `--event-flush-interval` | `YOMINS_EVENT_FLUSH_INTERVAL` | `10s` | How often to flush buffered events to the server |
 | `--event-batch-size` | `YOMINS_EVENT_BATCH_SIZE` | `200` | Maximum number of events per HTTP request |
 | `--logs` | `YOMINS_LOGS` | `off` | Log collection: `off` or `auto` (see [Logs](#logs)) |
@@ -519,11 +534,7 @@ docker run -d \
 
 `--user root` is required for `CAP_SYSLOG` to take effect in the process's effective capability set — without it the kernel rejects `/dev/kmsg` opens even when the capability is added. Given that this container already uses `--pid=host`, `--net=host`, and mounts the host rootfs, the nonroot restriction provides no meaningful security boundary.
 
-On Debian 13 (wtmp moved to `/var/log/wtmp.db`) replace the wtmp mount:
-
-```
--v /var/log/wtmp.db:/var/log/wtmp.db:ro
-```
+On Debian 13 `/var/log/wtmp` is no longer written: drop its mount. SSH events come from `/var/log/auth.log`, which Debian 12+ writes only with rsyslog installed.
 
 The named volume `yomins-agent-state` persists the `agent_id` across container restarts.
 
