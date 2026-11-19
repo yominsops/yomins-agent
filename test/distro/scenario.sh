@@ -1,7 +1,8 @@
 #!/bin/bash
 # Runs inside a distribution container booted with systemd (see run.sh).
 # Installs the agent with install.sh, then does what the agent must notice:
-# SSH logins (with and without a terminal), failed logins, sudo, a new user,
+# SSH logins (with and without a terminal), failed logins (passwords and a
+# rejected key), sudo, a new user,
 # an edited sshd_config and a new listening port.
 #
 #   scenario.sh <token> <ingest URL> <rsyslog: yes|no>
@@ -78,6 +79,9 @@ try() { E2E_PW=$2 DISPLAY=:0 SSH_ASKPASS=/root/askpass SSH_ASKPASS_REQUIRE=force
   $SSH -o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1 "$1@$IP" true </dev/null >/dev/null 2>&1; }
 for _ in 1 2 3 4 5 6; do try intruder wrong; done
 for _ in 1 2; do try alice wrong; done
+log "a key the server does not accept (what a key-only server sees)"
+ssh-keygen -q -t ed25519 -N '' -f /root/other_key
+$SSH -o BatchMode=yes -o PasswordAuthentication=no -i /root/other_key alice@"$IP" true </dev/null >/dev/null 2>&1
 
 log "user, config, port"
 useradd -M e2ebob

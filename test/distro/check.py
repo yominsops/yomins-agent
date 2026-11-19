@@ -55,9 +55,10 @@ n = count("auth.login_success", lambda e: actor(e).get("user") == "alice")
 check(n == 2, f"auth.login_success for alice == 2 (got {n})")
 n = count("auth.logout", lambda e: actor(e).get("user") == "alice")
 check(n >= 1, f"auth.logout for alice >= 1 (got {n})")
-# 6 connections as a user that does not exist + 2 wrong passwords.
+# 6 connections as a user that does not exist + 2 wrong passwords + 1
+# rejected key, each counted once.
 n = count("auth.login_failed")
-check(n == 8, f"auth.login_failed == 8 (got {n})")
+check(n == 9, f"auth.login_failed == 9 (got {n})")
 check(count("auth.bruteforce_detected", lambda e: actor(e).get("user") == "intruder") >= 1, "auth.bruteforce_detected")
 check(count("auth.sudo", lambda e: actor(e).get("user") == "alice") >= 1, "auth.sudo by alice")
 check(count("system.user_created", lambda e: actor(e).get("user") == "e2ebob"

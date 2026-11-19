@@ -35,7 +35,9 @@ func TestParseAuthLogLine(t *testing.T) {
 		{"Nov 19 13:34:09 host sshd[812]: Invalid user  from 198.51.100.9 port 54888", events.EventAuthLoginFailed, "", "198.51.100.9", "preauth"},
 		{"Nov 19 13:34:10 host sshd-session[900]: Accepted publickey for alice from 2001:db8::7 port 41234 ssh2: ED25519 SHA256:abc", events.EventAuthLoginSuccess, "alice", "2001:db8::7", "publickey"},
 		{"Nov 19 13:34:10 host sshd[900]: Accepted password for deploy from 203.0.113.5 port 41234 ssh2", events.EventAuthLoginSuccess, "deploy", "203.0.113.5", "password"},
-		{"Nov 19 13:40:00 host sshd-session[900]: pam_unix(sshd:session): session closed for user alice", events.EventAuthLogout, "alice", "", ""},
+		{"Nov 19 16:50:51 host sshd-session[900]: Disconnected from user alice 2001:db8::7 port 41919", events.EventAuthLogout, "alice", "2001:db8::7", ""},
+		{"Nov 19 16:41:02 host sshd-session[901]: Connection closed by authenticating user root 94.177.195.107 port 30329 [preauth]", events.EventAuthLoginFailed, "root", "94.177.195.107", "publickey"},
+		{"Nov 19 16:41:03 host sshd-session[902]: Disconnected from authenticating user root 94.177.195.108 port 30330 [preauth]", events.EventAuthLoginFailed, "root", "94.177.195.108", "publickey"},
 		{"Nov 19 13:34:11 host sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/id", events.EventAuthSudo, "alice", "", ""},
 	}
 	c := newTestCollector(t)
@@ -182,5 +184,26 @@ func TestReportedFromLog(t *testing.T) {
 	c.sshFromLog.Store(true)
 	if !c.reportedFromLog(ssh) || c.reportedFromLog(console) {
 		t.Fatal("with sshd's messages, wtmp reports only console sessions")
+	}
+}
+
+// A connection whose passwords failed also ends with "Connection closed by
+// authenticating user …": it is one failure per password, not one more.
+func TestParseAuthLogLine_ClosedAfterFailedPassword(t *testing.T) {
+	c := newTestCollector(t)
+	n := 0
+	for _, line := range []string{
+		"sshd[1]: Failed password for alice from 203.0.113.5 port 43192 ssh2",
+		"sshd[1]: Failed password for alice from 203.0.113.5 port 43192 ssh2",
+		"sshd[1]: Connection closed by authenticating user alice 203.0.113.5 port 43192 [preauth]",
+		"sshd[2]: Connection closed by authenticating user alice 203.0.113.5 port 43200 [preauth]", // another connection, keys only
+		"sshd[3]: Connection closed by 203.0.113.5 port 43300 [preauth]",                           // no user: not an attempt
+	} {
+		if _, ok := c.parseAuthLogLine(line); ok {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Errorf("%d failures, want 3", n)
 	}
 }

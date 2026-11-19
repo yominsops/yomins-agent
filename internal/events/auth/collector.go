@@ -70,7 +70,8 @@ type Collector struct {
 
 	mu           sync.Mutex
 	bfTracker    map[bruteforceKey]*bruteforceEntry
-	lastIPByUser map[string]string // user → last seen remote IP
+	lastIPByUser map[string]string    // user → last seen remote IP
+	failedConns  map[string]time.Time // "ip port" of connections with a counted failure
 
 	// sshFromLog is set once sshd's own messages are being read (auth log or
 	// journal). SSH logins and logouts then come from them — they cover
@@ -350,7 +351,7 @@ var (
 	//   "Failed password for alice from 1.2.3.4 port 22 ssh2"
 	// A user that does not exist is reported once, by reInvalidUser, not
 	// again by its "Failed password for invalid user …" line.
-	reLoginFailed     = regexp.MustCompile(`Failed (\S+) for (\S+) from (\S+) port \d+`)
+	reLoginFailed     = regexp.MustCompile(`Failed (\S+) for (\S+) from (\S+) port (\d+)`)
 	reLoginFailedInvU = regexp.MustCompile(`Failed \S+ for invalid user `)
 
 	// reInvalidUser matches sshd pre-auth username rejection lines:
@@ -362,9 +363,17 @@ var (
 	//   "Accepted publickey for alice from 1.2.3.4 port 22 ssh2: ED25519 SHA256:…"
 	reAccepted = regexp.MustCompile(`Accepted (\S+) for (\S+) from (\S+) port \d+`)
 
-	// reSessionClosed matches the end of an SSH session:
-	//   "pam_unix(sshd:session): session closed for user alice"
-	reSessionClosed = regexp.MustCompile(`pam_unix\(sshd:session\): session closed for user (\S+)`)
+	// reDisconnected matches the end of an authenticated SSH session; sshd
+	// logs it with or without PAM (UsePAM no logs no "session closed"):
+	//   "Disconnected from user alice 203.0.113.5 port 41919"
+	reDisconnected = regexp.MustCompile(`Disconnected from user (\S+) (\S+) port \d+`)
+
+	// reAuthAbandoned matches a connection that ended during authentication
+	// of an existing user. On a server that accepts keys only, it is the only
+	// trace a key-guessing client leaves (no "Failed …" line):
+	//   "Connection closed by authenticating user root 203.0.113.5 port 30329 [preauth]"
+	//   "Disconnected from authenticating user root 203.0.113.5 port 30329 [preauth]"
+	reAuthAbandoned = regexp.MustCompile(`(?:Connection closed by|Disconnected from) authenticating user (\S+) (\S+) port (\d+) \[preauth\]`)
 
 	reSudo = regexp.MustCompile(`sudo:\s+(\S+)\s*:.*?COMMAND=(.+)$`)
 )
@@ -437,6 +446,47 @@ func (c *Collector) runAuthLog(ctx context.Context, out chan<- events.Event) {
 	}
 }
 
+// loginFailed builds an auth.login_failed event of an existing user.
+func (c *Collector) loginFailed(now time.Time, user, ip, method, reason string) events.Event {
+	return events.Event{
+		ID:        uuid.New().String(),
+		Timestamp: now,
+		Type:      events.EventAuthLoginFailed,
+		Category:  events.CategoryAccessEvent,
+		Severity:  events.SeverityWarning,
+		Host:      c.cfg.Host,
+		Agent:     c.cfg.Agent,
+		Actor:     &events.ActorInfo{User: user, IP: ip, Method: method},
+		Context:   &events.ContextInfo{Reason: reason, Service: "sshd"},
+		Tags:      []string{"auth", "failed_login"},
+	}
+}
+
+// failedConnTTL is how long a connection (address and port) with a counted
+// failure is remembered, so its closing line does not count it again.
+const failedConnTTL = 10 * time.Minute
+
+func (c *Collector) recordFailure(ip, port string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failedConns == nil {
+		c.failedConns = map[string]time.Time{}
+	}
+	for k, t := range c.failedConns {
+		if now.Sub(t) > failedConnTTL {
+			delete(c.failedConns, k)
+		}
+	}
+	c.failedConns[ip+" "+port] = now
+}
+
+func (c *Collector) seenFailure(ip, port string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t, ok := c.failedConns[ip+" "+port]
+	return ok && now.Sub(t) <= failedConnTTL
+}
+
 func (c *Collector) parseAuthLogLine(line string) (events.Event, bool) {
 	now := time.Now().UTC()
 
@@ -456,7 +506,7 @@ func (c *Collector) parseAuthLogLine(line string) (events.Event, bool) {
 		}, true
 	}
 
-	if m := reSessionClosed.FindStringSubmatch(line); m != nil {
+	if m := reDisconnected.FindStringSubmatch(line); m != nil {
 		return events.Event{
 			ID:        uuid.New().String(),
 			Timestamp: now,
@@ -465,10 +515,20 @@ func (c *Collector) parseAuthLogLine(line string) (events.Event, bool) {
 			Severity:  events.SeverityInfo,
 			Host:      c.cfg.Host,
 			Agent:     c.cfg.Agent,
-			Actor:     &events.ActorInfo{User: m[1]},
-			Context:   &events.ContextInfo{Service: "sshd"},
+			Actor:     &events.ActorInfo{User: m[1], IP: m[2]},
+			Context:   &events.ContextInfo{RemoteIP: m[2], Service: "sshd"},
 			Tags:      []string{"auth", "logout"},
 		}, true
+	}
+
+	if m := reAuthAbandoned.FindStringSubmatch(line); m != nil {
+		user, ip, port := m[1], m[2], m[3]
+		// A connection whose passwords failed ends with this line too: it
+		// has been counted already.
+		if c.seenFailure(ip, port, now) {
+			return events.Event{}, false
+		}
+		return c.loginFailed(now, user, ip, "publickey", "auth_abandoned"), true
 	}
 
 	if reLoginFailedInvU.MatchString(line) {
@@ -476,26 +536,9 @@ func (c *Collector) parseAuthLogLine(line string) (events.Event, bool) {
 	}
 
 	if m := reLoginFailed.FindStringSubmatch(line); m != nil {
-		method, user, ip := m[1], m[2], m[3]
-		return events.Event{
-			ID:        uuid.New().String(),
-			Timestamp: now,
-			Type:      events.EventAuthLoginFailed,
-			Category:  events.CategoryAccessEvent,
-			Severity:  events.SeverityWarning,
-			Host:      c.cfg.Host,
-			Agent:     c.cfg.Agent,
-			Actor: &events.ActorInfo{
-				User:   user,
-				IP:     ip,
-				Method: method,
-			},
-			Context: &events.ContextInfo{
-				Reason:  "invalid_password",
-				Service: "sshd",
-			},
-			Tags: []string{"auth", "failed_login"},
-		}, true
+		method, user, ip, port := m[1], m[2], m[3], m[4]
+		c.recordFailure(ip, port, now)
+		return c.loginFailed(now, user, ip, method, "invalid_password"), true
 	}
 
 	if m := reInvalidUser.FindStringSubmatch(line); m != nil {

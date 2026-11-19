@@ -253,8 +253,8 @@ The agent also counts the events it detects and pushes the counts with the metri
 | Event | Trigger | Data source |
 |---|---|---|
 | `auth.login_success` | User logs in via SSH (with or without a terminal: `ssh host cmd`, scp, Ansible) or on the console | sshd's `Accepted …` message; console logins from `/var/log/wtmp` |
-| `auth.logout` | SSH or console session ends | sshd's `session closed` message; console sessions from `/var/log/wtmp` |
-| `auth.login_failed` | Failed authentication attempt (IPv4 and IPv6); a user that does not exist counts once per connection | sshd's messages |
+| `auth.logout` | SSH or console session ends | sshd's `Disconnected from user …` message (with or without PAM); console sessions from `/var/log/wtmp` |
+| `auth.login_failed` | Failed authentication attempt (IPv4 and IPv6): each wrong password, a connection of a user that does not exist, and a connection that gave up authenticating as an existing user — on a server that accepts keys only, the only trace a key-guessing client leaves. Each counted once | sshd's messages |
 | `auth.sudo` | `sudo` command executed | sudo's messages |
 | `auth.bruteforce_detected` | ≥ `--bruteforce-threshold` failed logins from the same IP+user within `--bruteforce-window` | derived from `auth.login_failed` |
 | `auth.login_new_ip` | Successful login from an IP not seen before for that user | derived from `auth.login_success`; state persisted in `<state-dir>/auth_last_ip.json` |
