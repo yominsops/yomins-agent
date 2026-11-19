@@ -39,7 +39,7 @@ var trackedServices = []string{
 	"vsftpd.service", "proftpd.service", "pure-ftpd.service", "fail2ban.service", "named.service", "bind9.service",
 	"firewalld.service", "ufw.service", "nftables.service", "csf.service", "lfd.service", "auditd.service",
 	"chronyd.service", "chrony.service", "systemd-timesyncd.service", "ntpd.service", "ntpsec.service",
-	"imunify360.service", "imunify-antivirus.service", "lvestats.service", "cpanel.service", "directadmin.service", "psa.service",
+	"imunify360.service", "imunify-antivirus.service", "lvestats.service", "db_governor.service", "cpanel.service", "directadmin.service", "psa.service",
 }
 
 const maxFailedUnits = 50

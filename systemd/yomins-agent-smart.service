@@ -1,0 +1,31 @@
+[Unit]
+Description=Yomins agent: disk health (SMART) scan
+Documentation=https://github.com/yominsops/yomins-agent#disk-health-smart
+# Only next to an installed agent, whose state directory gets the report.
+ConditionPathIsDirectory=/var/lib/yomins/agent
+
+[Service]
+Type=oneshot
+# Reading SMART needs root: raw ATA commands (CAP_SYS_RAWIO) and NVMe admin
+# commands (CAP_SYS_ADMIN). This unit runs nothing but smartctl and writes
+# /var/lib/yomins/agent/smart.json, which the unprivileged agent reads. No
+# config, token or network: the binary's smart-scan mode reads neither.
+ExecStart=/usr/local/bin/yomins-agent smart-scan --out /var/lib/yomins/agent/smart.json
+TimeoutStartSec=15min
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=true
+PrivateNetwork=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/yomins/agent
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
+# DAC_OVERRIDE: write into the agent's 0700 state directory. MKNOD: smartctl
+# creates /dev/megaraid_sas_ioctl_node itself on LSI/Broadcom RAID controllers.
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_MKNOD

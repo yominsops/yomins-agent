@@ -46,10 +46,12 @@ var defaultMonitoredFiles = []string{
 }
 
 // Collector emits system.reboot on startup if a reboot is detected, and
-// system.oom_killer whenever the kernel OOM killer fires. It also polls
+// system.oom_killer whenever the kernel OOM killer fires, system.hardware_error
+// when the kernel logs failing hardware. It also polls
 // /etc/passwd for user changes and monitors critical config files.
 type Collector struct {
-	cfg Config
+	cfg     Config
+	hwLimit *hwLimiter
 }
 
 // NewCollector creates a SystemCollector.
@@ -137,7 +139,7 @@ func (c *Collector) saveBootTime(t uint64) {
 func (c *Collector) runOOMWatcher(ctx context.Context, out chan<- events.Event) {
 	f, err := openKmsg()
 	if err != nil {
-		slog.Warn("system: /dev/kmsg unavailable, OOM events disabled", "error", err)
+		slog.Warn("system: /dev/kmsg unavailable, OOM and hardware error events disabled", "error", err)
 		return
 	}
 	defer f.Close()
@@ -186,7 +188,11 @@ func (c *Collector) runOOMWatcher(ctx context.Context, out chan<- events.Event) 
 			if !ok {
 				return
 			}
-			if ev, matched := c.parseOOM(line); matched {
+			ev, matched := c.parseOOM(line)
+			if !matched {
+				ev, matched = c.hardwareEvent(line, time.Now())
+			}
+			if matched {
 				select {
 				case out <- ev:
 				case <-done:

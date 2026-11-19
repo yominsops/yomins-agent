@@ -54,6 +54,7 @@ jobs:
           - { image: "ubuntu:22.04", id: ubuntu, rsyslog: "yes" }
           - { image: "ubuntu:24.04", id: ubuntu, rsyslog: "yes" }
           - { image: "ubuntu:25.10", id: ubuntu, rsyslog: "yes" }
+          - { image: "ubuntu:26.04", id: ubuntu, rsyslog: "yes" }
           - { image: "almalinux:8", id: almalinux, rsyslog: "yes" }
           - { image: "almalinux:9", id: almalinux, rsyslog: "yes" }
           - { image: "almalinux:10", id: almalinux, rsyslog: "yes" }

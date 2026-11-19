@@ -402,6 +402,30 @@ install_service() {
     fi
 }
 
+# The SMART timer runs `yomins-agent smart-scan` as root once an hour: reading
+# disk health needs root, the agent itself does not have it.
+install_smart_timer() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local unit
+    for unit in yomins-agent-smart.service yomins-agent-smart.timer; do
+        if [[ -f "${script_dir}/systemd/${unit}" ]]; then
+            install -m 644 "${script_dir}/systemd/${unit}" "${SYSTEMD_DIR}/${unit}"
+        elif ! curl -fsSL "${RELEASES_BASE}/download/${AGENT_VERSION}/${unit}" -o "${SYSTEMD_DIR}/${unit}"; then
+            warn "Could not download ${unit}; disk health (SMART) will not be reported."
+            rm -f "${SYSTEMD_DIR}/yomins-agent-smart.service" "${SYSTEMD_DIR}/yomins-agent-smart.timer"
+            return 0
+        fi
+        chmod 644 "${SYSTEMD_DIR}/${unit}"
+        command -v restorecon &>/dev/null && restorecon "${SYSTEMD_DIR}/${unit}" || true
+    done
+    systemctl daemon-reload
+    systemctl enable --now yomins-agent-smart.timer || warn "Could not start yomins-agent-smart.timer."
+    if ! command -v smartctl &>/dev/null; then
+        info "smartmontools is not installed: install it to get disk health (SMART) on physical disks."
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Post-install verification
 # ---------------------------------------------------------------------------
@@ -452,9 +476,10 @@ do_uninstall() {
     info "Stopping service..."
     systemctl stop  "$SERVICE_NAME" 2>/dev/null || true
     systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+    systemctl disable --now yomins-agent-smart.timer 2>/dev/null || true
 
     info "Removing service file..."
-    rm -f "$SERVICE_FILE"
+    rm -f "$SERVICE_FILE" "${SYSTEMD_DIR}/yomins-agent-smart.service" "${SYSTEMD_DIR}/yomins-agent-smart.timer"
     systemctl daemon-reload
 
     info "Removing files..."
@@ -548,6 +573,7 @@ main() {
     install_upgrade_script
     write_config
     install_service
+    install_smart_timer
     verify_running
 
     printf "\n"

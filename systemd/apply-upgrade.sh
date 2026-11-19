@@ -92,6 +92,47 @@ refresh_unit() {
     return 0
 }
 
+# install_smart VERSION — installs the root SMART timer of VERSION
+# (yomins-agent-smart.service and .timer: `yomins-agent smart-scan`, hourly)
+# and starts it. Run after the new binary is in place, so the timer never
+# starts an older binary that has no smart-scan mode. Like the unit, fetched
+# as root from the release. A failure only leaves SMART unreported.
+install_smart() {
+    version="$1"
+    printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    tmp=$(mktemp -d) || return 0
+    if ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent-smart.service" -o "${tmp}/service" ||
+        ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent-smart.timer" -o "${tmp}/timer"; then
+        log "smart timer: download failed, skipped"
+        rm -rf "$tmp"
+        return 0
+    fi
+    if ! grep -q '^ExecStart=/usr/local/bin/yomins-agent smart-scan' "${tmp}/service" || ! grep -q '^\[Timer\]' "${tmp}/timer"; then
+        log "smart timer: unexpected files in ${version}, skipped"
+        rm -rf "$tmp"
+        return 0
+    fi
+    changed=0
+    for f in service timer; do
+        dst="/etc/systemd/system/yomins-agent-smart.${f}"
+        if ! cmp -s "${tmp}/${f}" "$dst"; then
+            cp "${tmp}/${f}" "${dst}.new"
+            chmod 644 "${dst}.new"
+            mv "${dst}.new" "$dst"
+            if command -v restorecon >/dev/null 2>&1; then restorecon "$dst" || true; fi
+            changed=1
+        fi
+    done
+    rm -rf "$tmp"
+    if [ "$changed" = 1 ]; then
+        systemctl daemon-reload
+        log "smart timer: units of ${version} installed"
+    fi
+    systemctl enable --now yomins-agent-smart.timer >/dev/null 2>&1 || log "smart timer: could not start"
+    return 0
+}
+
 # Fast path: no upgrade activity.
 if [ ! -f "$PENDING" ] && [ ! -f "$APPLIED" ] && [ ! -f "$COMMITTED" ]; then
     exit 0
@@ -152,6 +193,8 @@ if [ -f "$PENDING" ]; then
 
     rm -f "$PENDING" "$NEW"
     touch "$APPLIED"
+
+    install_smart "$version"
 
     log "upgrade applied, binary replaced — waiting for agent to commit"
 fi

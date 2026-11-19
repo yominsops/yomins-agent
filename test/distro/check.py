@@ -76,6 +76,8 @@ check(re.search(r'^security_ssh_option\{[^}]*option="passwordauthentication"[^}]
       "security_ssh_option passwordauthentication=yes")
 check(re.search(r'^security_accounts\{[^}]*kind="uid0_extra"', metrics, re.M) is not None, "security_accounts")
 check(re.search(r'^security_firewall_enabled', metrics, re.M) is not None, "security_firewall_enabled")
+# The root SMART timer wrote its report (a container has no disks with SMART).
+check(re.search(r'^smart_smartctl_installed', metrics, re.M) is not None, "smart_smartctl_installed (SMART timer report)")
 check(count("network.connection_open", lambda e: (e.get("network") or {}).get("local_port") == 2222) >= 1,
       "network.connection_open :2222")
 

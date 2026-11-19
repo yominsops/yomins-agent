@@ -1,0 +1,10 @@
+[Unit]
+Description=Yomins agent: hourly disk health (SMART) scan
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

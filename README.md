@@ -32,7 +32,7 @@ The service install (install.sh, systemd) is tested end to end on every pull req
 | Family | Tested | Package manager | sshd and sudo messages |
 |---|---|---|---|
 | Debian | 12, 13 | apt | journal (no rsyslog by default) |
-| Ubuntu | 22.04, 24.04, 25.10 | apt | journal (also in `auth.log`) |
+| Ubuntu | 22.04, 24.04, 25.10, 26.04 | apt | journal (also in `auth.log`) |
 | AlmaLinux, Rocky Linux | 8, 9, 10 / 9 | dnf 4 | journal (also in `secure`) |
 | Fedora | 43 | dnf 5 | journal |
 | Amazon Linux | 2023 | dnf 4 | journal |
@@ -162,6 +162,47 @@ Read from `/proc` and `/sys` on every push, except where noted.
 | `system_updates_pending{kind}`, `system_reboot_required` | Gauge | Every 6 h: pending updates (all / security) from the package manager's cache — apt, dnf 4/5, zypper, yum (no `security` on yum); reboot needed: `/run/reboot-required`, a newer kernel in `/boot`, `dnf needs-restarting -r`, `zypper needs-rebooting`. Omitted when the package manager does not answer |
 | `tls_certificate_expiry_timestamp_seconds{path,subject,issuer}` | Gauge | Hourly: certbot certificates and those nginx, Apache, Dovecot, Exim, Postfix are configured with |
 
+### Hardware health (Linux)
+
+On every push, from files any user can read. A virtual machine has little or none of it, and those metrics are absent.
+
+| Metric | Description | Source |
+|---|---|---|
+| `raid_array_active`, `raid_array_disks`, `raid_array_degraded_disks`, `raid_array_failed_disks` (`device`, `level`) | Software RAID: serving I/O; disks it is built for; disks missing (above 0 = no full redundancy; not for raid0/linear); members marked faulty | `/sys/block/md*/md/` |
+| `raid_array_sync_action{device,action}`, `raid_array_sync_ratio{device}` | 1 for the current action (`idle`, `resync`, `recover` = rebuild, `check`, `repair`, `reshape`, `frozen`); progress 0–1 while it runs | `sync_action`, `sync_completed` |
+| `zfs_pool_state{pool,state}` | 1 for the pool's state: `online`, `degraded`, `faulted`, `offline`, `unavail`, `removed`, `suspended` | `/proc/spl/kstat/zfs/<pool>/state` |
+| `memory_ecc_errors_total{controller,type}` | ECC memory errors, `corrected` (a module is failing) and `uncorrected` | EDAC, `/sys/devices/system/edac/mc/mc*/` |
+| `hardware_temperature_celsius`, `hardware_temperature_critical_celsius` (`chip`, `device`, `sensor`) | Sensor temperatures (CPU packages and cores, board, NVMe, disks with `drivetemp`) and their critical point (`_crit`, else `_max`) | `/sys/class/hwmon/*/temp*_input` |
+| `hardware_fan_rpm{chip,device,sensor}` | Fan speed | `/sys/class/hwmon/*/fan*_input` |
+| `cpu_thermal_throttle_events_total` | Times CPU cores slowed down because they were too hot | `/sys/devices/system/cpu/cpu*/thermal_throttle/` |
+
+#### Disk health (SMART)
+
+Reading SMART needs root, which the agent does not have. `install.sh` (and the self-upgrade, from this version on) installs a separate root timer, `yomins-agent-smart.timer`: hourly, it runs `yomins-agent smart-scan`, which runs only `smartctl --scan-open` and `smartctl --json --all --nocheck=standby` (sleeping disks are not woken) and writes `/var/lib/yomins/agent/smart.json`. The service has no network, no config and no token, and only the capabilities `smartctl` needs (`CAP_SYS_RAWIO`, `CAP_SYS_ADMIN`, `CAP_DAC_OVERRIDE` to write the report, `CAP_MKNOD` for MegaRAID). It needs `smartmontools` (7.0+, for JSON); without it the agent reports `smart_smartctl_installed 0`. Disks behind a MegaRAID or other controller are read when `smartctl --scan-open` lists them.
+
+| Metric | Description |
+|---|---|
+| `smart_smartctl_installed`, `smart_scan_ok`, `smart_scan_timestamp_seconds` | smartmontools present; last scan worked; when it ran. Readings older than 3 h are dropped |
+| `smart_device_healthy` (`device`, `type`, `protocol`, `model`, `serial`) | The drive's own verdict: 0 = it expects to fail |
+| `smart_device_standby` | The disk was asleep and left so |
+| `smart_temperature_celsius`, `smart_power_on_hours` | |
+| `smart_attribute{attribute}` | Raw counters: ATA `reallocated_sectors` (5), `reported_uncorrectable` (187), `command_timeouts` (188), `pending_sectors` (197), `offline_uncorrectable` (198), `udma_crc_errors` (199, cable), `failing_now` (attributes below their threshold); NVMe `nvme_critical_warning`, `nvme_percentage_used` (wear), `nvme_available_spare_percent`, `nvme_available_spare_threshold_percent`, `nvme_media_errors`, `nvme_error_log_entries`, `nvme_unsafe_shutdowns`; SCSI/SAS `scsi_grown_defects` |
+
+#### CloudLinux
+
+Only on CloudLinux OS, from files (the agent cannot run `lvectl` or `cagefsctl`). Written against the CloudLinux documentation: `/proc/lve/list` is read by its header, so columns that differ between LVE versions are picked up by name.
+
+| Metric | Description | Source |
+|---|---|---|
+| `cloudlinux_lve_enabled` | LVE limits are on | `LVE_ENABLE` in `/etc/sysconfig/lve` |
+| `cloudlinux_lve_accounts` | Accounts with their own LVE | `/proc/lve/list` |
+| `cloudlinux_lve_faults_total{limit}` | Times accounts hit a limit, all together: `ep` (entry processes — 508 errors), `mem`, `memphy`/`pmem` (memory — 503 errors), `nproc`, `io`, `iops` — the `f*` columns | `/proc/lve/list` |
+| `cloudlinux_lve_accounts_at_limit{limit}` | Accounts that hit the limit since the previous push: how many sites suffer | `/proc/lve/list` |
+| `cloudlinux_lve_entry_processes`, `cloudlinux_lve_processes` | Entry processes and processes of all accounts | `EP`, `NPROC` columns |
+| `cloudlinux_cagefs_initialized`, `cloudlinux_cagefs_listed_users{list}` | The CageFS skeleton exists; accounts in `/etc/cagefs/users.disabled` (the exceptions in "Enable All" mode) and `users.enabled` (the only ones in "Disable All" mode) | `/usr/share/cagefs-skeleton`, `/etc/cagefs/` |
+
+KernelCare is `kernelcare_info`; `lvestats`, `db_governor`, `imunify360`, `alt-php*` and `ea-php*` are in `systemd_service_active`.
+
 ### Security posture (Linux)
 
 Every 5 minutes. A metric is left out where its subject does not exist on the host (no SELinux on Debian, no ufw on RHEL), so `0` always means "there and off".
@@ -254,13 +295,13 @@ Domain-specific payloads (`process`, `network`) are added for relevant event typ
 |---|---|
 | `access_event` | All auth events (`login_success`, `login_failed`, `logout`, `sudo`) |
 | `threat_activity` | `auth.bruteforce_detected`, `auth.login_new_ip`, `process.suspicious`, `process.exec_tmp`, `process.reverse_shell`, `network.scan_detected`, `network.suspicious_port`, `system.user_created`, `system.user_deleted`, `system.config_modified`, `system.persistence_changed` |
-| `system_check` | Process lifecycle, listening ports, system events |
+| `system_check` | Process lifecycle, listening ports, system events, `system.hardware_error` |
 
 | Severity | Events |
 |---|---|
 | `info` | login_success, logout, process.start/stop, network.connection_open |
-| `warning` | login_failed, sudo, process.high_cpu/memory, process.exec_tmp, auth.login_new_ip, network.suspicious_port, system.reboot/oom_killer, system.user_deleted |
-| `critical` | auth.bruteforce_detected, process.suspicious, process.reverse_shell, network.scan_detected, system.user_created, system.config_modified, system.persistence_changed (authorized_keys, ld.so.preload; others `warning`) |
+| `warning` | login_failed, sudo, process.high_cpu/memory, process.exec_tmp, auth.login_new_ip, network.suspicious_port, system.reboot/oom_killer, system.user_deleted, system.hardware_error (disk I/O, ata, nvme, corrected ECC) |
+| `critical` | auth.bruteforce_detected, process.suspicious, process.reverse_shell, network.scan_detected, system.user_created, system.config_modified, system.persistence_changed (authorized_keys, ld.so.preload; others `warning`), system.hardware_error (RAID member failed, filesystem errors, uncorrected ECC, MCE) |
 
 ### Counts for alerting
 
@@ -323,6 +364,7 @@ Ports in LISTEN state at agent startup are the baseline. Only new ports emit eve
 |---|---|---|
 | `system.reboot` | Boot timestamp is newer than the last persisted boot time | gopsutil `BootTime()` + `<state-dir>/last_boot_time` |
 | `system.oom_killer` | Kernel OOM killer kills a process | `/dev/kmsg` (requires `CAP_SYSLOG` or root) |
+| `system.hardware_error` | The kernel logs failing hardware. `tags` carry the kind and device, `context.service` the device, `context.reason` the kernel's message. Kinds: `disk_io` (I/O error, medium error), `ata` (failed command), `nvme` (timeout, controller down), `raid_disk_failed` (md kicked a member out), `filesystem_error` (ext4, XFS, Btrfs), `filesystem_readonly` (ext4 remounted read-only), `memory_ecc` (EDAC CE / UE), `mce` (machine check). At most one per kind and device an hour; the next says how many were held back | `/dev/kmsg` |
 | `system.user_created` | A username not present in the snapshot appears in `/etc/passwd` | `/etc/passwd` polled every 30 s; state in `<state-dir>/passwd_snapshot.json` |
 | `system.user_deleted` | A username present in the snapshot disappears from `/etc/passwd` | `/etc/passwd` polled every 30 s |
 | `system.config_modified` | SHA-256 hash of a monitored file changes, or a drop-in is added, changed or removed | `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/sudoers`, `/etc/ssh/sshd_config`; drop-ins `/etc/sudoers.d/*`, `/etc/ssh/sshd_config.d/*`, `/etc/pam.d/*`, `/etc/security/access.conf` — polled every 30 s |
@@ -620,7 +662,8 @@ internal/
                            events.go        — event flush (JSON batches → ingest /v1/push/events)
   agent/                — orchestration loop (collect → encode → push)
   upgrade/              — self-upgrade: version check, download, staging, rollback
-systemd/                — systemd service unit and apply-upgrade.sh helper script
+  smart/                — `smart-scan`: smartctl → smart.json (run by the root timer)
+systemd/                — service unit, apply-upgrade.sh helper, SMART service and timer
 Dockerfile
 Makefile
 ```

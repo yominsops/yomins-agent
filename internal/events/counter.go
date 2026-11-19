@@ -13,7 +13,7 @@ var AllTypes = []EventType{
 	EventAuthLoginSuccess, EventAuthLoginFailed, EventAuthLogout, EventAuthSudo, EventAuthBruteforceDetected, EventAuthLoginNewIP,
 	EventProcessStart, EventProcessStop, EventProcessHighCPU, EventProcessHighMemory, EventProcessSuspicious, EventProcessExecTmp, EventProcessReverseShell,
 	EventNetworkConnectionOpen, EventNetworkScanDetected, EventNetworkSuspiciousPort,
-	EventSystemReboot, EventSystemOOMKiller, EventSystemUserCreated, EventSystemUserDeleted, EventSystemConfigModified, EventSystemPersistence,
+	EventSystemReboot, EventSystemOOMKiller, EventSystemUserCreated, EventSystemUserDeleted, EventSystemConfigModified, EventSystemPersistence, EventSystemHardwareError,
 }
 
 // Counter counts the events by type and reports them with the metrics as

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -36,6 +37,12 @@ func main() {
 }
 
 func run() error {
+	// The root SMART timer runs the binary as a one-shot disk scan: no
+	// config, no network, nothing but smartctl and the report file.
+	if len(os.Args) > 1 && os.Args[1] == "smart-scan" {
+		return runSmartScan(os.Args[2:])
+	}
+
 	// 1. Load and validate configuration.
 	cfg, err := config.Load()
 	if err != nil {
@@ -231,6 +238,9 @@ func allCollectors(cfg *config.Config) []collector.Collector {
 			collector.Every(6*time.Hour, collector.NewUpdatesCollector(paths, cfg.StateDir)),
 			collector.Every(5*time.Minute, collector.NewPostureCollector(paths)),
 			collector.Every(time.Hour, collector.NewCertsCollector(paths, nil)),
+			collector.NewHardwareCollector(paths),
+			collector.NewSMARTCollector(filepath.Join(cfg.StateDir, "smart.json")),
+			collector.NewCloudLinuxCollector(paths),
 		)
 	}
 	if !cfg.DisableIntegrations && runtime.GOOS == "linux" {
@@ -310,7 +320,12 @@ func runUninstall() error {
 	fmt.Println()
 	run("Stopping service", func() error { return runCmd("systemctl", "stop", serviceName) })
 	run("Disabling service", func() error { return runCmd("systemctl", "disable", serviceName) })
+	run("Disabling SMART timer", func() error { return runCmd("systemctl", "disable", "--now", "yomins-agent-smart.timer") })
 	run("Removing service file", func() error { return os.Remove(serviceFile) })
+	run("Removing SMART units", func() error {
+		_ = os.Remove("/etc/systemd/system/yomins-agent-smart.service")
+		return os.Remove("/etc/systemd/system/yomins-agent-smart.timer")
+	})
 	run("Reloading systemd", func() error { return runCmd("systemctl", "daemon-reload") })
 	run("Removing config dir", func() error { return os.RemoveAll(configDir) })
 	run("Removing lib dir", func() error { return os.RemoveAll(libDir) })

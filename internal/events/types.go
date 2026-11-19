@@ -37,6 +37,9 @@ const (
 	// EventSystemPersistence: a file that keeps an intruder in changed —
 	// authorized_keys, cron, a systemd unit, ld.so.preload, rc.local, shell profiles.
 	EventSystemPersistence EventType = "system.persistence_changed"
+	// EventSystemHardwareError: the kernel logged a failing disk, filesystem,
+	// RAID member, memory module or CPU.
+	EventSystemHardwareError EventType = "system.hardware_error"
 )
 
 // Category groups events by broad domain.

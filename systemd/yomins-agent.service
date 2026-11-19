@@ -52,6 +52,8 @@ TimeoutStopSec=15s
 # allow list (YOMINS_LOG_ALLOW, default /var/log/** and app log dirs).
 AmbientCapabilities=CAP_SYSLOG CAP_DAC_READ_SEARCH
 CapabilityBoundingSet=CAP_SYSLOG CAP_DAC_READ_SEARCH
+# Disk health (SMART) needs root and is read by a separate root timer,
+# yomins-agent-smart.timer, into /var/lib/yomins/agent/smart.json.
 # Required for reading from journald
 SupplementaryGroups=systemd-journal adm shadow
 

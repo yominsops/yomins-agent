@@ -16,12 +16,15 @@ if command -v apt-get >/dev/null; then
   apt-get update -qq >/dev/null
   apt-get install -y -qq openssh-server openssh-client sudo curl ca-certificates iproute2 procps >/dev/null
   [ "$RSYSLOG" = yes ] && apt-get install -y -qq rsyslog >/dev/null
+  apt-get install -y -qq --no-install-recommends smartmontools >/dev/null 2>&1 || true
 elif command -v dnf >/dev/null; then
   dnf -y -q install openssh-server openssh-clients sudo curl iproute procps-ng shadow-utils util-linux >/dev/null 2>&1 \
     || dnf -y -q install --allowerasing openssh-server openssh-clients sudo curl iproute procps-ng shadow-utils util-linux >/dev/null
   [ "$RSYSLOG" = yes ] && dnf -y -q install rsyslog >/dev/null
+  dnf -y -q install smartmontools >/dev/null 2>&1 || true
 elif command -v zypper >/dev/null; then
   zypper -q -n install openssh-server openssh-clients sudo curl iproute2 procps shadow util-linux >/dev/null
+  zypper -q -n install smartmontools >/dev/null 2>&1 || true
   [ "$RSYSLOG" = yes ] && zypper -q -n install rsyslog >/dev/null
 fi
 [ "$RSYSLOG" = yes ] && systemctl enable --now rsyslog >/dev/null 2>&1
@@ -63,6 +66,10 @@ YOMINS_DISABLE_AUTO_UPGRADE=true
 YOMINS_EVENT_FLUSH_INTERVAL=5s
 E
 systemctl restart yomins-agent
+log "SMART timer: enabled by install.sh, one scan now"
+systemctl is-enabled yomins-agent-smart.timer || exit 1
+systemctl start yomins-agent-smart.service || { journalctl -u yomins-agent-smart --no-pager | tail -20; exit 1; }
+journalctl -u yomins-agent-smart --no-pager | grep smart-scan | tail -1
 sleep 20
 systemctl is-active yomins-agent || { journalctl -u yomins-agent --no-pager | tail -30; exit 1; }
 
