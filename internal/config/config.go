@@ -42,6 +42,7 @@ type Config struct {
 	EventBufferSize         int      // default: 10000
 	WtmpPath                string   // default: /var/log/wtmp
 	AuthLogPath             string   // default: /var/log/auth.log
+	AuthLogPathSet          bool     // AuthLogPath was given (flag or env): read that file, not the journal
 	SuspiciousPatterns      []string // CSV; defaults defined in process collector
 
 	// Threat detection
@@ -361,7 +362,10 @@ func overlayEnv(cfg *Config, explicit map[string]bool) {
 	if !explicit["auth-log-path"] {
 		if v := os.Getenv("YOMINS_AUTH_LOG_PATH"); v != "" {
 			cfg.AuthLogPath = v
+			cfg.AuthLogPathSet = true
 		}
+	} else {
+		cfg.AuthLogPathSet = true
 	}
 	if !explicit["event-flush-interval"] {
 		if v := os.Getenv("YOMINS_EVENT_FLUSH_INTERVAL"); v != "" {

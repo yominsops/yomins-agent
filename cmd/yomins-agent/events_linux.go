@@ -39,6 +39,7 @@ func startEventPipeline(ctx context.Context, cfg *config.Config, hostname string
 		collectors = append(collectors, auth.NewCollector(auth.Config{
 			WtmpPath:              cfg.WtmpPath,
 			AuthLogPath:           cfg.AuthLogPath,
+			AuthLogPathSet:        cfg.AuthLogPathSet,
 			StateDir:              cfg.StateDir,
 			BruteforceThreshold:   cfg.BruteforceThreshold,
 			BruteforceWindow:      cfg.BruteforceWindow,

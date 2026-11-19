@@ -34,16 +34,17 @@ func (c *Collector) runJournalLog(ctx context.Context, out chan<- events.Event) 
 		return
 	}
 
-	// -f         : follow (stream new entries as they arrive)
-	// -n 0       : start from now; do not replay historical entries
-	// -o json    : one JSON object per line; gives us _COMM for routing
-	// _COMM=sshd : sshd log lines (failed logins)
-	// +          : logical OR
-	// _COMM=sudo : sudo execution lines
+	// -f    : follow (stream new entries as they arrive)
+	// -n 0  : start from now; do not replay historical entries
+	// -o json: one JSON object per line; gives us _COMM for routing
+	// The matches on one field are OR-ed. OpenSSH 9.8 split sshd: the
+	// per-connection process that logs logins is sshd-session (and since
+	// 10.0 sshd-auth for authentication), on Debian 13, Ubuntu 25.04+,
+	// Fedora 41+, RHEL 9.6+/10 and their rebuilds.
 	cmd := exec.CommandContext(ctx, "journalctl",
 		"-f", "-n", "0",
 		"-o", "json",
-		"_COMM=sshd", "+", "_COMM=sudo",
+		"_COMM=sshd", "_COMM=sshd-session", "_COMM=sshd-auth", "_COMM=sudo",
 	)
 
 	stdout, err := cmd.StdoutPipe()
@@ -58,25 +59,14 @@ func (c *Collector) runJournalLog(ctx context.Context, out chan<- events.Event) 
 	}
 	defer cmd.Wait() //nolint:errcheck
 
-	slog.Info("auth: using journald for failed-login/sudo events (no auth.log found)")
+	c.sshFromLog.Store(true)
+	slog.Info("auth: reading sshd and sudo messages from the journal")
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
-		now := time.Now().UTC()
 		if ev, ok := c.parseJournalLine(scanner.Text()); ok {
-			select {
-			case out <- ev:
-			case <-ctx.Done():
+			if !c.send(ctx, out, ev, time.Now().UTC()) {
 				return
-			}
-			if ev.Type == events.EventAuthLoginFailed && ev.Actor != nil {
-				if bfEv, triggered := c.checkBruteforce(ev.Actor.User, ev.Actor.IP, now); triggered {
-					select {
-					case out <- bfEv:
-					case <-ctx.Done():
-						return
-					}
-				}
 			}
 		}
 	}

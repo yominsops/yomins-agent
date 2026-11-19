@@ -10,11 +10,13 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -35,7 +37,10 @@ func fileInode(fi os.FileInfo) uint64 {
 type Config struct {
 	WtmpPath    string // default: /var/log/wtmp
 	AuthLogPath string // default: /var/log/auth.log; falls back to /var/log/secure
-	StateDir    string // for persisting the wtmp byte cursor and login-IP state
+	// AuthLogPathSet: AuthLogPath was configured, so that file is read even
+	// where the journal could be. Otherwise the journal is preferred.
+	AuthLogPathSet bool
+	StateDir       string // for persisting the wtmp byte cursor and login-IP state
 
 	BruteforceThreshold   int           // default: 5
 	BruteforceWindow      time.Duration // default: 30s
@@ -66,6 +71,15 @@ type Collector struct {
 	mu           sync.Mutex
 	bfTracker    map[bruteforceKey]*bruteforceEntry
 	lastIPByUser map[string]string // user → last seen remote IP
+
+	// sshFromLog is set once sshd's own messages are being read (auth log or
+	// journal). SSH logins and logouts then come from them — they cover
+	// sessions without a terminal, which wtmp never records — and wtmp
+	// reports only the other (console) sessions.
+	sshFromLog atomic.Bool
+
+	// journalUsable reports whether the journal can be read; tests replace it.
+	journalUsable func() bool
 }
 
 // NewCollector creates a new AuthCollector.
@@ -73,13 +87,9 @@ func NewCollector(cfg Config) *Collector {
 	if cfg.WtmpPath == "" {
 		cfg.WtmpPath = "/var/log/wtmp"
 	}
-	// Debian 13 (trixie) uses wtmp.db instead of wtmp.
-	if _, err := os.Stat(cfg.WtmpPath); os.IsNotExist(err) {
-		const wtmpDB = "/var/log/wtmp.db"
-		if _, err2 := os.Stat(wtmpDB); err2 == nil {
-			cfg.WtmpPath = wtmpDB
-		}
-	}
+	// Debian 13 (trixie) records logins with wtmpdb, an SQLite database in
+	// /var/lib/wtmpdb, instead of /var/log/wtmp. It is not read: SSH logins
+	// and logouts come from sshd's messages either way.
 	if cfg.AuthLogPath == "" {
 		cfg.AuthLogPath = "/var/log/auth.log"
 	}
@@ -102,25 +112,31 @@ func NewCollector(cfg Config) *Collector {
 		cfg.BruteforceSuppression = 2 * time.Minute
 	}
 	return &Collector{
-		cfg:          cfg,
-		bfTracker:    make(map[bruteforceKey]*bruteforceEntry),
-		lastIPByUser: loadLastIPByUser(cfg.StateDir),
+		cfg:           cfg,
+		bfTracker:     make(map[bruteforceKey]*bruteforceEntry),
+		lastIPByUser:  loadLastIPByUser(cfg.StateDir),
+		journalUsable: journalReadable,
 	}
 }
 
 func (c *Collector) Name() string { return "auth" }
 
 // Run starts the wtmp and auth log watchers and multiplexes their events onto out.
-// The auth log watcher uses a file if one exists (auth.log or secure), otherwise
-// it falls back to reading the systemd journal via journalctl.
+// sshd and sudo messages are read from the journal when it can be read: every
+// systemd distribution keeps them there, whether or not a syslog daemon also
+// writes auth.log (Debian, Ubuntu) or secure (RHEL) — and a file that exists
+// is no proof that anything still writes it. A configured auth log path, or
+// a host without a readable journal (a container with the file mounted),
+// uses the file.
 func (c *Collector) Run(ctx context.Context, out chan<- events.Event) error {
 	sub := make(chan events.Event, 64)
 
 	go c.runWtmp(ctx, sub)
 
-	if _, err := os.Stat(c.cfg.AuthLogPath); err == nil {
+	switch c.authSource() {
+	case "file":
 		go c.runAuthLog(ctx, sub)
-	} else {
+	default:
 		go c.runJournalLog(ctx, sub)
 	}
 
@@ -144,6 +160,37 @@ func (c *Collector) Run(ctx context.Context, out chan<- events.Event) error {
 			c.gcBruteforceTracker()
 		}
 	}
+}
+
+// authSource picks where sshd and sudo messages are read from: "journal" or "file".
+func (c *Collector) authSource() string {
+	_, err := os.Stat(c.cfg.AuthLogPath)
+	fileExists := err == nil
+	if c.cfg.AuthLogPathSet && fileExists {
+		return "file"
+	}
+	if c.journalUsable() {
+		return "journal"
+	}
+	if fileExists {
+		return "file"
+	}
+	return "journal" // logs why it cannot be read
+}
+
+// journalReadable is true when journalctl exists and returns entries to this
+// user (without the systemd-journal group it prints nothing and exits 0).
+func journalReadable() bool {
+	if _, err := os.Stat("/run/systemd/journal"); err != nil {
+		return false
+	}
+	if _, err := exec.LookPath("journalctl"); err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "journalctl", "-q", "-n", "1", "-o", "cat", "--no-pager").Output()
+	return err == nil && len(strings.TrimSpace(string(out))) > 0
 }
 
 // ── wtmp watcher ──────────────────────────────────────────────────────────────
@@ -208,16 +255,16 @@ func (c *Collector) runWtmp(ctx context.Context, out chan<- events.Event) {
 						switch rec.Type {
 						case utUserProcess:
 							// Login records always carry a username.
-							if rec.User != "" {
+							if rec.User != "" && !c.reportedFromLog(rec) {
 								out <- c.makeLoginEvent(rec)
-								if nipEv, triggered := c.checkNewIP(rec, now); triggered {
+								if nipEv, triggered := c.checkNewIP(rec.User, rec.Host, now); triggered {
 									out <- nipEv
 								}
 							}
 						case utDeadProcess:
 							// Logout records have an empty ut_user by kernel convention;
 							// use TTY as the presence check instead.
-							if rec.TTY != "" {
+							if rec.TTY != "" && !c.reportedFromLog(rec) {
 								out <- c.makeLogoutEvent(rec)
 							}
 						}
@@ -231,6 +278,13 @@ func (c *Collector) runWtmp(ctx context.Context, out chan<- events.Event) {
 			c.saveWtmpCursor(cursor)
 		}
 	}
+}
+
+// reportedFromLog is true for a wtmp record of an SSH session (a pseudo
+// terminal) once sshd's messages are read: that session's login and logout
+// are reported from them.
+func (c *Collector) reportedFromLog(rec parsedRecord) bool {
+	return c.sshFromLog.Load() && strings.HasPrefix(rec.TTY, "pts/")
 }
 
 func (c *Collector) makeLoginEvent(rec parsedRecord) events.Event {
@@ -290,15 +344,27 @@ func (c *Collector) saveWtmpCursor(offset int64) {
 
 // Patterns for lines we care about in auth.log / journal messages.
 var (
-	// reLoginFailed matches sshd password/pubkey failure lines:
+	// Addresses are IPv4 or IPv6 ("from 2001:db8::7 port 22").
+
+	// reLoginFailed matches sshd password/pubkey failure lines of existing users:
 	//   "Failed password for alice from 1.2.3.4 port 22 ssh2"
-	//   "Failed password for invalid user alice from 1.2.3.4 port 22 ssh2"
-	reLoginFailed = regexp.MustCompile(`Failed (\S+) for (?:invalid user )?(\S+) from ([\d.]+) port \d+`)
+	// A user that does not exist is reported once, by reInvalidUser, not
+	// again by its "Failed password for invalid user …" line.
+	reLoginFailed     = regexp.MustCompile(`Failed (\S+) for (\S+) from (\S+) port \d+`)
+	reLoginFailedInvU = regexp.MustCompile(`Failed \S+ for invalid user `)
 
 	// reInvalidUser matches sshd pre-auth username rejection lines:
-	//   "Invalid user admin from 1.2.3.4 port 22"
+	//   "Invalid user admin from 1.2.3.4 port 22" (the name may be empty)
 	// This fires before any password check, so the method is recorded as "preauth".
-	reInvalidUser = regexp.MustCompile(`Invalid user (\S+) from ([\d.]+) port \d+`)
+	reInvalidUser = regexp.MustCompile(`Invalid user (\S*) from (\S+) port \d+`)
+
+	// reAccepted matches a successful SSH login, with a terminal or without:
+	//   "Accepted publickey for alice from 1.2.3.4 port 22 ssh2: ED25519 SHA256:…"
+	reAccepted = regexp.MustCompile(`Accepted (\S+) for (\S+) from (\S+) port \d+`)
+
+	// reSessionClosed matches the end of an SSH session:
+	//   "pam_unix(sshd:session): session closed for user alice"
+	reSessionClosed = regexp.MustCompile(`pam_unix\(sshd:session\): session closed for user (\S+)`)
 
 	reSudo = regexp.MustCompile(`sudo:\s+(\S+)\s*:.*?COMMAND=(.+)$`)
 )
@@ -322,6 +388,9 @@ func (c *Collector) runAuthLog(ctx context.Context, out chan<- events.Event) {
 	if fi, err := f.Stat(); err == nil {
 		prevInode = fileInode(fi)
 	}
+
+	c.sshFromLog.Store(true)
+	slog.Info("auth: reading sshd and sudo messages from file", "path", c.cfg.AuthLogPath)
 
 	reader := bufio.NewReader(f)
 	ticker := time.NewTicker(5 * time.Second)
@@ -354,19 +423,8 @@ func (c *Collector) runAuthLog(ctx context.Context, out chan<- events.Event) {
 					line = strings.TrimRight(line, "\r\n")
 					now := time.Now().UTC()
 					if ev, ok := c.parseAuthLogLine(line); ok {
-						select {
-						case out <- ev:
-						case <-ctx.Done():
+						if !c.send(ctx, out, ev, now) {
 							return
-						}
-						if ev.Type == events.EventAuthLoginFailed && ev.Actor != nil {
-							if bfEv, triggered := c.checkBruteforce(ev.Actor.User, ev.Actor.IP, now); triggered {
-								select {
-								case out <- bfEv:
-								case <-ctx.Done():
-									return
-								}
-							}
 						}
 					}
 				}
@@ -381,6 +439,41 @@ func (c *Collector) runAuthLog(ctx context.Context, out chan<- events.Event) {
 
 func (c *Collector) parseAuthLogLine(line string) (events.Event, bool) {
 	now := time.Now().UTC()
+
+	if m := reAccepted.FindStringSubmatch(line); m != nil {
+		method, user, ip := m[1], m[2], m[3]
+		return events.Event{
+			ID:        uuid.New().String(),
+			Timestamp: now,
+			Type:      events.EventAuthLoginSuccess,
+			Category:  events.CategoryAccessEvent,
+			Severity:  events.SeverityInfo,
+			Host:      c.cfg.Host,
+			Agent:     c.cfg.Agent,
+			Actor:     &events.ActorInfo{User: user, IP: ip, Method: method},
+			Context:   &events.ContextInfo{RemoteIP: ip, Service: "sshd"},
+			Tags:      []string{"auth", "login"},
+		}, true
+	}
+
+	if m := reSessionClosed.FindStringSubmatch(line); m != nil {
+		return events.Event{
+			ID:        uuid.New().String(),
+			Timestamp: now,
+			Type:      events.EventAuthLogout,
+			Category:  events.CategoryAccessEvent,
+			Severity:  events.SeverityInfo,
+			Host:      c.cfg.Host,
+			Agent:     c.cfg.Agent,
+			Actor:     &events.ActorInfo{User: m[1]},
+			Context:   &events.ContextInfo{Service: "sshd"},
+			Tags:      []string{"auth", "logout"},
+		}, true
+	}
+
+	if reLoginFailedInvU.MatchString(line) {
+		return events.Event{}, false
+	}
 
 	if m := reLoginFailed.FindStringSubmatch(line); m != nil {
 		method, user, ip := m[1], m[2], m[3]
@@ -448,6 +541,33 @@ func (c *Collector) parseAuthLogLine(line string) (events.Event, bool) {
 	}
 
 	return events.Event{}, false
+}
+
+// send delivers an event parsed from sshd or sudo messages, followed by
+// what it implies: a brute-force alert after a failed login, a new-IP alert
+// after a successful one. It returns false when ctx is done.
+func (c *Collector) send(ctx context.Context, out chan<- events.Event, ev events.Event, now time.Time) bool {
+	evs := []events.Event{ev}
+	if ev.Actor != nil {
+		switch ev.Type {
+		case events.EventAuthLoginFailed:
+			if bf, ok := c.checkBruteforce(ev.Actor.User, ev.Actor.IP, now); ok {
+				evs = append(evs, bf)
+			}
+		case events.EventAuthLoginSuccess:
+			if nip, ok := c.checkNewIP(ev.Actor.User, ev.Actor.IP, now); ok {
+				evs = append(evs, nip)
+			}
+		}
+	}
+	for _, e := range evs {
+		select {
+		case out <- e:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
 }
 
 // ── bruteforce detection ──────────────────────────────────────────────────────
@@ -535,8 +655,7 @@ func (c *Collector) gcBruteforceTracker() {
 
 // checkNewIP returns a login_new_ip event if the user logged in from an IP
 // not seen before.
-func (c *Collector) checkNewIP(rec parsedRecord, now time.Time) (events.Event, bool) {
-	ip := rec.Host
+func (c *Collector) checkNewIP(user, ip string, now time.Time) (events.Event, bool) {
 	if ip == "" {
 		return events.Event{}, false
 	}
@@ -547,15 +666,15 @@ func (c *Collector) checkNewIP(rec parsedRecord, now time.Time) (events.Event, b
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	prev, known := c.lastIPByUser[rec.User]
-	c.lastIPByUser[rec.User] = ip
+	prev, known := c.lastIPByUser[user]
+	c.lastIPByUser[user] = ip
 	saveLastIPByUser(c.cfg.StateDir, c.lastIPByUser)
 
 	if !known || prev == ip {
 		return events.Event{}, false
 	}
 
-	slog.Warn("auth: login from new IP", "user", rec.User, "previous_ip", prev, "current_ip", ip)
+	slog.Warn("auth: login from new IP", "user", user, "previous_ip", prev, "current_ip", ip)
 	return events.Event{
 		ID:         uuid.New().String(),
 		Timestamp:  now,
@@ -566,7 +685,7 @@ func (c *Collector) checkNewIP(rec parsedRecord, now time.Time) (events.Event, b
 		Host:       c.cfg.Host,
 		Agent:      c.cfg.Agent,
 		Actor: &events.ActorInfo{
-			User: rec.User,
+			User: user,
 			IP:   ip,
 		},
 		Context: &events.ContextInfo{
@@ -629,7 +748,7 @@ func isPrivateIP(ip string) bool {
 	if parsed == nil {
 		return false
 	}
-	if parsed.IsLoopback() {
+	if parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsLinkLocalUnicast() {
 		return true
 	}
 	for _, n := range privateNets {
