@@ -24,14 +24,22 @@ func NewSystemdCollector() *SystemdCollector { return &SystemdCollector{run: exe
 func (c *SystemdCollector) Name() string { return "systemd" }
 
 // trackedServices are glob patterns of services whose state is reported.
+// Names differ between distributions (exim4 on Debian, exim on RHEL; redis
+// became valkey on Fedora 41 and EL10), and hosting stacks add their own
+// (LiteSpeed, cPanel's ea-php, CloudLinux's alt-php, Imunify360).
 var trackedServices = []string{
 	"nginx.service", "apache2.service", "httpd.service", "caddy.service", "haproxy.service", "varnish.service",
-	"php*-fpm.service", "php-fpm.service",
-	"mysql.service", "mysqld.service", "mariadb.service", "postgresql*.service", "redis*.service", "mongod.service",
-	"memcached.service", "elasticsearch.service", "rabbitmq-server.service",
-	"exim4.service", "postfix.service", "dovecot.service", "spamd.service", "spamassassin.service", "clamav-daemon.service",
-	"docker.service", "containerd.service", "ssh.service", "sshd.service", "cron.service", "crond.service",
+	"lshttpd.service", "lsws.service", "openlitespeed.service",
+	"php*-fpm.service", "php-fpm.service", "ea-php*-php-fpm.service", "alt-php*-fpm.service",
+	"mysql.service", "mysqld.service", "mariadb.service", "postgresql*.service", "redis*.service", "valkey*.service", "mongod.service",
+	"memcached.service", "elasticsearch.service", "opensearch.service", "rabbitmq-server.service",
+	"exim4.service", "exim.service", "postfix.service", "dovecot.service", "spamd.service", "spamassassin.service",
+	"clamav-daemon.service", "clamd@*.service", "clamd.service",
+	"docker.service", "containerd.service", "podman.service", "ssh.service", "sshd.service", "cron.service", "crond.service",
 	"vsftpd.service", "proftpd.service", "pure-ftpd.service", "fail2ban.service", "named.service", "bind9.service",
+	"firewalld.service", "ufw.service", "nftables.service", "csf.service", "lfd.service", "auditd.service",
+	"chronyd.service", "chrony.service", "systemd-timesyncd.service", "ntpd.service", "ntpsec.service",
+	"imunify360.service", "imunify-antivirus.service", "lvestats.service", "cpanel.service", "directadmin.service", "psa.service",
 }
 
 const maxFailedUnits = 50

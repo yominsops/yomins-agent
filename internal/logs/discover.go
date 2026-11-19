@@ -26,7 +26,12 @@ var knownLogs = []FileSpec{
 	{Source: "auth", Parser: ParserSyslog, Globs: []string{"/var/log/auth.log", "/var/log/secure"}},
 	{Source: "kernel", Parser: ParserSyslog, Globs: []string{"/var/log/kern.log"}},
 	{Source: "cron", Parser: ParserSyslog, Globs: []string{"/var/log/cron.log", "/var/log/cron"}},
-	{Source: "packages", Parser: ParserPlain, Globs: []string{"/var/log/dpkg.log", "/var/log/dnf.log", "/var/log/yum.log", "/var/log/apt/history.log", "/var/log/unattended-upgrades/unattended-upgrades.log"}},
+	// packages: dnf5.log on Fedora 41+, zypp/history on SUSE.
+	{Source: "packages", Parser: ParserPlain, Globs: []string{"/var/log/dpkg.log", "/var/log/dnf.log", "/var/log/dnf5.log", "/var/log/yum.log", "/var/log/zypp/history", "/var/log/apt/history.log", "/var/log/unattended-upgrades/unattended-upgrades.log"}},
+	// firewalld's own messages (RHEL, Fedora, SUSE). ufw.log is left out: it
+	// repeats the kernel's blocked-packet lines that syslog/kern.log already
+	// carry, and on a public host they are most of the volume.
+	{Source: "firewall", Parser: ParserPlain, Globs: []string{"/var/log/firewalld"}},
 
 	// web
 	{Source: "nginx", Parser: ParserNginxAccess, Globs: []string{"/var/log/nginx/*access*.log", "/var/log/nginx/*analytics*.log"}},
@@ -43,8 +48,9 @@ var knownLogs = []FileSpec{
 	{Source: "mongodb", Parser: ParserJSON, Globs: []string{"/var/log/mongodb/*.log"}},
 
 	// mail
-	{Source: "mail", Parser: ParserSyslog, Globs: []string{"/var/log/mail.log", "/var/log/maillog", "/var/log/mail.err"}},
-	{Source: "exim", Parser: ParserPlain, Globs: []string{"/var/log/exim4/mainlog", "/var/log/exim4/rejectlog", "/var/log/exim4/paniclog", "/var/log/exim/main.log", "/var/log/exim/reject.log", "/var/log/exim/panic.log"}},
+	// mail: maillog on RHEL, mail on SUSE.
+	{Source: "mail", Parser: ParserSyslog, Globs: []string{"/var/log/mail.log", "/var/log/maillog", "/var/log/mail", "/var/log/mail.err"}},
+	{Source: "exim", Parser: ParserPlain, Globs: []string{"/var/log/exim4/mainlog", "/var/log/exim4/rejectlog", "/var/log/exim4/paniclog", "/var/log/exim/main.log", "/var/log/exim/reject.log", "/var/log/exim/panic.log", "/var/log/exim_mainlog", "/var/log/exim_rejectlog", "/var/log/exim_paniclog"}},
 	{Source: "dovecot", Parser: ParserSyslog, Globs: []string{"/var/log/dovecot*.log"}},
 
 	// other services
