@@ -135,6 +135,30 @@ install_timer() {
     return 0
 }
 
+# ensure_timers — installs the root timers of the installed binary's release
+# once per version. The run that applies an upgrade is still the previous
+# helper (refresh_unit replaces this file while it runs), which may not know
+# a timer the new release added; the next start, under this helper, installs
+# it. The marker only skips a repeat: an older release without a timer is
+# tried once.
+ensure_timers() {
+    v=$("$BINARY" --version 2>/dev/null | awk 'NR == 1 { print $1 }')
+    printf '%s' "$v" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || return 0
+    mark="${UPGRADE_DIR}/timers-${v}"
+    [ -f "$mark" ] && return 0
+    for t in smart:smart-scan restart:restart-scan; do
+        # Already there: no download at start (an upgrade refreshes them).
+        [ -f "/etc/systemd/system/yomins-agent-${t%%:*}.timer" ] && continue
+        install_timer "$v" "${t%%:*}" "${t#*:}"
+    done
+    mkdir -p "$UPGRADE_DIR" 2>/dev/null || return 0
+    rm -f "${UPGRADE_DIR}"/timers-v* 2>/dev/null || true
+    touch "$mark" 2>/dev/null || true
+    return 0
+}
+
+ensure_timers
+
 # Fast path: no upgrade activity.
 if [ ! -f "$PENDING" ] && [ ! -f "$APPLIED" ] && [ ! -f "$COMMITTED" ]; then
     exit 0
