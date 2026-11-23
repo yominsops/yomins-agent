@@ -92,30 +92,32 @@ refresh_unit() {
     return 0
 }
 
-# install_smart VERSION — installs the root SMART timer of VERSION
-# (yomins-agent-smart.service and .timer: `yomins-agent smart-scan`, hourly)
-# and starts it. Run after the new binary is in place, so the timer never
-# starts an older binary that has no smart-scan mode. Like the unit, fetched
-# as root from the release. A failure only leaves SMART unreported.
-install_smart() {
-    version="$1"
+# install_timer VERSION NAME MODE — installs a root timer of VERSION
+# (yomins-agent-NAME.service and .timer, running `yomins-agent MODE`) and
+# starts it: smart (disk health, smart-scan) and restart (services running
+# replaced code, restart-scan). Run after the new binary is in place, so the
+# timer never starts an older binary that lacks the mode. Like the unit,
+# fetched as root from the release. A failure only leaves that part
+# unreported; a release without the timer (older than it) is skipped.
+install_timer() {
+    version="$1" name="$2" mode="$3"
     printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || return 0
     command -v curl >/dev/null 2>&1 || return 0
     tmp=$(mktemp -d) || return 0
-    if ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent-smart.service" -o "${tmp}/service" ||
-        ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent-smart.timer" -o "${tmp}/timer"; then
-        log "smart timer: download failed, skipped"
+    if ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent-${name}.service" -o "${tmp}/service" ||
+        ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent-${name}.timer" -o "${tmp}/timer"; then
+        log "${name} timer: download failed, skipped"
         rm -rf "$tmp"
         return 0
     fi
-    if ! grep -q '^ExecStart=/usr/local/bin/yomins-agent smart-scan' "${tmp}/service" || ! grep -q '^\[Timer\]' "${tmp}/timer"; then
-        log "smart timer: unexpected files in ${version}, skipped"
+    if ! grep -q "^ExecStart=/usr/local/bin/yomins-agent ${mode}" "${tmp}/service" || ! grep -q '^\[Timer\]' "${tmp}/timer"; then
+        log "${name} timer: unexpected files in ${version}, skipped"
         rm -rf "$tmp"
         return 0
     fi
     changed=0
     for f in service timer; do
-        dst="/etc/systemd/system/yomins-agent-smart.${f}"
+        dst="/etc/systemd/system/yomins-agent-${name}.${f}"
         if ! cmp -s "${tmp}/${f}" "$dst"; then
             cp "${tmp}/${f}" "${dst}.new"
             chmod 644 "${dst}.new"
@@ -127,9 +129,9 @@ install_smart() {
     rm -rf "$tmp"
     if [ "$changed" = 1 ]; then
         systemctl daemon-reload
-        log "smart timer: units of ${version} installed"
+        log "${name} timer: units of ${version} installed"
     fi
-    systemctl enable --now yomins-agent-smart.timer >/dev/null 2>&1 || log "smart timer: could not start"
+    systemctl enable --now "yomins-agent-${name}.timer" >/dev/null 2>&1 || log "${name} timer: could not start"
     return 0
 }
 
@@ -194,7 +196,8 @@ if [ -f "$PENDING" ]; then
     rm -f "$PENDING" "$NEW"
     touch "$APPLIED"
 
-    install_smart "$version"
+    install_timer "$version" smart smart-scan
+    install_timer "$version" restart restart-scan
 
     log "upgrade applied, binary replaced — waiting for agent to commit"
 fi

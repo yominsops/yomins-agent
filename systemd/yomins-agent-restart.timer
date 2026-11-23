@@ -1,0 +1,10 @@
+[Unit]
+Description=Yomins agent: hourly scan for services to restart
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

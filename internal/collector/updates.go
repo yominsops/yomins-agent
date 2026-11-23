@@ -73,6 +73,14 @@ func (c *UpdatesCollector) Collect(ctx context.Context) ([]metrics.MetricPoint, 
 		if p.securityKnown {
 			pts = append(pts, gauge("system_updates_pending", "Packages with an update available", float64(p.security), map[string]string{"kind": "security"}))
 		}
+		if p.thirdPartyKnown {
+			pts = append(pts, gauge("system_updates_pending", "Packages with an update available", float64(p.thirdParty), map[string]string{"kind": "third_party"}))
+		}
+		if p.heldKnown {
+			pts = append(pts,
+				gauge("system_updates_held", "Packages held back (apt-mark hold) that have an update: unattended upgrades never install it", float64(p.held), map[string]string{"kind": "all"}),
+				gauge("system_updates_held", "Packages held back (apt-mark hold) that have an update: unattended upgrades never install it", float64(p.heldSecurity), map[string]string{"kind": "security"}))
+		}
 	}
 	reboot := 0.0
 	if c.rebootRequired(ctx) {
@@ -86,6 +94,13 @@ type pendingUpdates struct {
 	all, security int
 	ok            bool // the package manager answered
 	securityKnown bool // it also told which updates fix security issues
+
+	// apt only. thirdParty: updates from outside the distribution
+	// (packages.sury.org, Docker), which no "-security" label marks.
+	// held, heldSecurity: updates of held packages, which all and
+	// security leave out.
+	thirdParty, held, heldSecurity int
+	thirdPartyKnown, heldKnown     bool
 }
 
 func (c *UpdatesCollector) has(name string) bool {
@@ -107,8 +122,15 @@ func (c *UpdatesCollector) pending(ctx context.Context) pendingUpdates {
 		if r.err != nil || r.code != 0 {
 			return pendingUpdates{}
 		}
-		all, security := countApt(r.out)
-		return pendingUpdates{all: all, security: security, ok: true, securityKnown: true}
+		a := countApt(r.out)
+		p := pendingUpdates{all: a.all, security: a.security, ok: true, securityKnown: true, thirdParty: a.thirdParty, thirdPartyKnown: true}
+		// The same simulation ignoring holds: the difference is what the
+		// holds keep back.
+		if h := c.run(ctx, nil, "apt-get", "-s", "-o", "Debug::NoLocking=1", "--ignore-hold", "dist-upgrade"); h.err == nil && h.code == 0 {
+			ih := countApt(h.out)
+			p.held, p.heldSecurity, p.heldKnown = max(ih.all-a.all, 0), max(ih.security-a.security, 0), true
+		}
+		return p
 	case c.has("dnf"):
 		env := c.env()
 		// check-update exits 100 when updates exist, 0 when none, 1 on error.
@@ -142,17 +164,53 @@ func (c *UpdatesCollector) pending(ctx context.Context) pendingUpdates {
 	return pendingUpdates{}
 }
 
-func countApt(out []byte) (all, security int) {
-	for _, line := range strings.Split(string(out), "\n") {
+type aptCounts struct{ all, security, thirdParty int }
+
+// countApt counts the "Inst" lines of an apt-get simulation:
+//
+//	Inst libc6 [2.36-9] (2.36-9+deb12u9 Debian-Security:12/stable-security [arm64])
+//	Inst php-common [2:101] (2:102+debsuryorg12.1+3 bookworm [all])
+//
+// The parentheses hold the new version and where it comes from: one or more
+// "Origin:version/suite", or a bare suite when the repository names no origin.
+func countApt(out []byte) aptCounts {
+	var n aptCounts
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if !strings.HasPrefix(line, "Inst ") {
 			continue
 		}
-		all++
+		n.all++
 		if strings.Contains(line, "-security") || strings.Contains(line, "Debian-Security") {
-			security++
+			n.security++
+		}
+		if !distroOrigin(line) {
+			n.thirdParty++
 		}
 	}
-	return all, security
+	return n
+}
+
+// distroOrigin is true when the update comes from Debian or Ubuntu
+// (including Ubuntu Pro / ESM).
+func distroOrigin(line string) bool {
+	i := strings.LastIndexByte(line, '(')
+	if i < 0 {
+		return true // no origin to judge: do not count it as third-party
+	}
+	src := line[i+1:]
+	if j := strings.Index(src, " "); j >= 0 {
+		src = src[j+1:] // drop the version
+	}
+	if j := strings.LastIndex(src, " ["); j >= 0 {
+		src = src[:j]
+	}
+	for o := range strings.SplitSeq(src, ",") {
+		o = strings.TrimSpace(o)
+		if strings.HasPrefix(o, "Debian") || strings.HasPrefix(o, "Ubuntu") {
+			return true
+		}
+	}
+	return false
 }
 
 var reRPMArch = regexp.MustCompile(`\.(noarch|x86_64|aarch64|i686|i386|ppc64le|s390x|armv7hl)$`)

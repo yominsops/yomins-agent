@@ -160,6 +160,7 @@ Read from `/proc` and `/sys` on every push, except where noted.
 | `systemd_service_active{unit,state}`, `systemd_service_restarts_total{unit}` | Gauge, Counter | The usual services (web, PHP, databases, mail, Docker, SSH, cron) |
 | `process_group_cpu_percent`, `process_group_memory_bytes`, `process_group_count` | Gauge | Top 10 process names by CPU and by memory (`process`) |
 | `system_updates_pending{kind}`, `system_reboot_required` | Gauge | Every 6 h: pending updates (all / security) from the package manager's cache — apt, dnf 4/5, zypper, yum (no `security` on yum); reboot needed: `/run/reboot-required`, a newer kernel in `/boot`, `dnf needs-restarting -r`, `zypper needs-rebooting`. Omitted when the package manager does not answer |
+| `system_updates_pending{kind="third_party"}`, `system_updates_held{kind}` | Gauge | apt only. `third_party`: updates from repositories outside Debian/Ubuntu (packages.sury.org, Docker CE…), which no `-security` label marks. `system_updates_held` (`all` / `security`): updates of packages held with `apt-mark hold`, which unattended-upgrades never installs and `kind=all`/`security` leave out (an `apt-get -s --ignore-hold` simulation) |
 | `tls_certificate_expiry_timestamp_seconds{path,subject,issuer}` | Gauge | Hourly: certbot certificates and those nginx, Apache, Dovecot, Exim, Postfix are configured with |
 
 ### Hardware health (Linux)
@@ -187,6 +188,17 @@ Reading SMART needs root, which the agent does not have. `install.sh` (and the s
 | `smart_device_standby` | The disk was asleep and left so |
 | `smart_temperature_celsius`, `smart_power_on_hours` | |
 | `smart_attribute{attribute}` | Raw counters: ATA `reallocated_sectors` (5), `reported_uncorrectable` (187), `command_timeouts` (188), `pending_sectors` (197), `offline_uncorrectable` (198), `udma_crc_errors` (199, cable), `failing_now` (attributes below their threshold); NVMe `nvme_critical_warning`, `nvme_percentage_used` (wear), `nvme_available_spare_percent`, `nvme_available_spare_threshold_percent`, `nvme_media_errors`, `nvme_error_log_entries`, `nvme_unsafe_shutdowns`; SCSI/SAS `scsi_grown_defects` |
+
+#### Services to restart
+
+After an update replaces a library or a binary, services started before keep running the old, deleted file until they restart, so the fix is not in effect yet. Finding them means reading other processes' `/proc/<pid>/maps`, which needs ptrace access the agent does not have. `install.sh` and the self-upgrade install a root timer, `yomins-agent-restart.timer`: hourly, it runs `yomins-agent restart-scan`, which reads only `/proc` and writes `/var/lib/yomins/agent/restart.json`. No network, no config, no token; capabilities `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH` and `CAP_DAC_OVERRIDE` (to write the report). A process counts when it maps a deleted file under `/usr`, `/lib`, `/lib64`, `/bin`, `/sbin` or `/opt`; it is attributed to its systemd service from its cgroup. Container processes are skipped (their files come from the image).
+
+| Metric | Description |
+|---|---|
+| `restart_scan_ok`, `restart_scan_timestamp_seconds` | Last scan worked; when it ran. Readings older than 3 h are dropped |
+| `system_services_restart_required` | Number of services running replaced code |
+| `system_service_restart_required{unit}` | 1 for each such service (`nginx.service`) |
+| `system_processes_restart_required_other` | Such processes outside a service: login sessions, user managers |
 
 #### CloudLinux
 

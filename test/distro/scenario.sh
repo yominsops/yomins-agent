@@ -70,6 +70,10 @@ log "SMART timer: enabled by install.sh, one scan now"
 systemctl is-enabled yomins-agent-smart.timer || exit 1
 systemctl start yomins-agent-smart.service || { journalctl -u yomins-agent-smart --no-pager | tail -20; exit 1; }
 journalctl -u yomins-agent-smart --no-pager | grep smart-scan | tail -1
+log "restart timer: enabled by install.sh, one scan now"
+systemctl is-enabled yomins-agent-restart.timer || exit 1
+systemctl start yomins-agent-restart.service || { journalctl -u yomins-agent-restart --no-pager | tail -20; exit 1; }
+journalctl -u yomins-agent-restart --no-pager | grep restart-scan | tail -1
 sleep 20
 systemctl is-active yomins-agent || { journalctl -u yomins-agent --no-pager | tail -30; exit 1; }
 

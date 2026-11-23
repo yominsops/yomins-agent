@@ -402,25 +402,29 @@ install_service() {
     fi
 }
 
-# The SMART timer runs `yomins-agent smart-scan` as root once an hour: reading
-# disk health needs root, the agent itself does not have it.
-install_smart_timer() {
-    local script_dir
+# Root timers: reading disk health (smart-scan) and other processes' memory
+# maps (restart-scan) needs root, the agent itself does not have it.
+# install_root_timer NAME WHAT installs yomins-agent-NAME.service and .timer.
+install_root_timer() {
+    local name="$1" what="$2" script_dir unit
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local unit
-    for unit in yomins-agent-smart.service yomins-agent-smart.timer; do
+    for unit in "yomins-agent-${name}.service" "yomins-agent-${name}.timer"; do
         if [[ -f "${script_dir}/systemd/${unit}" ]]; then
             install -m 644 "${script_dir}/systemd/${unit}" "${SYSTEMD_DIR}/${unit}"
         elif ! curl -fsSL "${RELEASES_BASE}/download/${AGENT_VERSION}/${unit}" -o "${SYSTEMD_DIR}/${unit}"; then
-            warn "Could not download ${unit}; disk health (SMART) will not be reported."
-            rm -f "${SYSTEMD_DIR}/yomins-agent-smart.service" "${SYSTEMD_DIR}/yomins-agent-smart.timer"
+            warn "Could not download ${unit}; ${what} will not be reported."
+            rm -f "${SYSTEMD_DIR}/yomins-agent-${name}.service" "${SYSTEMD_DIR}/yomins-agent-${name}.timer"
             return 0
         fi
         chmod 644 "${SYSTEMD_DIR}/${unit}"
         command -v restorecon &>/dev/null && restorecon "${SYSTEMD_DIR}/${unit}" || true
     done
     systemctl daemon-reload
-    systemctl enable --now yomins-agent-smart.timer || warn "Could not start yomins-agent-smart.timer."
+    systemctl enable --now "yomins-agent-${name}.timer" || warn "Could not start yomins-agent-${name}.timer."
+}
+
+install_smart_timer() {
+    install_root_timer smart "disk health (SMART)"
     if ! command -v smartctl &>/dev/null; then
         info "smartmontools is not installed: install it to get disk health (SMART) on physical disks."
     fi
@@ -477,9 +481,11 @@ do_uninstall() {
     systemctl stop  "$SERVICE_NAME" 2>/dev/null || true
     systemctl disable "$SERVICE_NAME" 2>/dev/null || true
     systemctl disable --now yomins-agent-smart.timer 2>/dev/null || true
+    systemctl disable --now yomins-agent-restart.timer 2>/dev/null || true
 
     info "Removing service file..."
-    rm -f "$SERVICE_FILE" "${SYSTEMD_DIR}/yomins-agent-smart.service" "${SYSTEMD_DIR}/yomins-agent-smart.timer"
+    rm -f "$SERVICE_FILE" "${SYSTEMD_DIR}/yomins-agent-smart.service" "${SYSTEMD_DIR}/yomins-agent-smart.timer" \
+        "${SYSTEMD_DIR}/yomins-agent-restart.service" "${SYSTEMD_DIR}/yomins-agent-restart.timer"
     systemctl daemon-reload
 
     info "Removing files..."
@@ -574,6 +580,7 @@ main() {
     write_config
     install_service
     install_smart_timer
+    install_root_timer restart "services to restart after updates"
     verify_running
 
     printf "\n"

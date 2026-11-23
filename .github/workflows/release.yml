@@ -69,6 +69,7 @@ jobs:
           cp systemd/yomins-agent.service dist/yomins-agent.service
           cp systemd/apply-upgrade.sh dist/apply-upgrade.sh
           cp systemd/yomins-agent-smart.service systemd/yomins-agent-smart.timer dist/
+          cp systemd/yomins-agent-restart.service systemd/yomins-agent-restart.timer dist/
           cp install.sh dist/install.sh
 
       - uses: actions/upload-artifact@v4
@@ -118,6 +119,8 @@ jobs:
             dist/apply-upgrade.sh \
             dist/yomins-agent-smart.service \
             dist/yomins-agent-smart.timer \
+            dist/yomins-agent-restart.service \
+            dist/yomins-agent-restart.timer \
             dist/install.sh
 
   # -------------------------------------------------------------------------

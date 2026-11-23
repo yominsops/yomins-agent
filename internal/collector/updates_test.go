@@ -46,6 +46,68 @@ func TestUpdates_Apt(t *testing.T) {
 	}
 }
 
+// Output shaped like a Debian 12 host with packages.sury.org, Docker CE and
+// exim4 held back. sury names no origin, only its suite.
+func TestUpdates_AptHeldAndThirdParty(t *testing.T) {
+	plain := "Inst php-common [2:101] (2:102+debsuryorg12.1+3 bookworm [all])\n" +
+		"Inst docker-buildx-plugin [0.39.0-1~debian.12~bookworm] (0.39.1-1~debian.12~bookworm Docker CE:bookworm [arm64])\n" +
+		"Inst libruby3.1 [3.1.2-7+deb12u1] (3.1.2-7+deb12u2 Debian:12.15/oldstable, Debian-Security:12/oldstable-security [arm64])\n" +
+		"Inst libc-bin [2.39-0ubuntu8.9] (2.39-0ubuntu8.12 Ubuntu:24.04/noble-updates [amd64])\n" +
+		"Inst libpq5 [16.1] (16.2 UbuntuESMApps:24.04/noble-apps-security [amd64])\n"
+	held := plain +
+		"Inst exim4 [4.92-8+deb10u9~bk11] (4.96-15+deb12u10 Debian:12.15/oldstable, Debian-Security:12/oldstable-security [all]) []\n" +
+		"Inst exim4-daemon-heavy [4.92-8+deb10u9~bk11] (4.96-15+deb12u10 Debian:12.15/oldstable, Debian-Security:12/oldstable-security [arm64]) []\n" +
+		"Inst vim [1] (2 Debian:12.15/oldstable [arm64])\n"
+	c := updatesWith(t, fixture(t, nil), "apt-get", fakeCmd{
+		"apt-get -s -o Debug::NoLocking=1 dist-upgrade":               {out: []byte(plain)},
+		"apt-get -s -o Debug::NoLocking=1 --ignore-hold dist-upgrade": {out: []byte(held)},
+	})
+	pts, _ := c.Collect(context.Background())
+	for _, w := range []struct {
+		name, kind string
+		v          float64
+	}{
+		{"system_updates_pending", "all", 5},
+		{"system_updates_pending", "security", 2},
+		{"system_updates_pending", "third_party", 2},
+		{"system_updates_held", "all", 3},
+		{"system_updates_held", "security", 2},
+	} {
+		if got := find(t, pts, w.name, "kind", w.kind); got != w.v {
+			t.Errorf("%s{kind=%s} = %v, want %v", w.name, w.kind, got, w.v)
+		}
+	}
+}
+
+// When the simulation without holds fails, held updates are not reported
+// (rather than reported as 0).
+func TestUpdates_AptHeldUnknown(t *testing.T) {
+	c := updatesWith(t, fixture(t, nil), "apt-get", fakeCmd{
+		"apt-get -s -o Debug::NoLocking=1 dist-upgrade": {out: []byte("Inst vim [1] (2 Debian:12.8/stable [arm64])\n")},
+	})
+	pts, _ := c.Collect(context.Background())
+	if has(pts, "system_updates_held") || find(t, pts, "system_updates_pending", "kind", "third_party") != 0 {
+		t.Errorf("%v", pts)
+	}
+}
+
+func TestDistroOrigin(t *testing.T) {
+	for line, want := range map[string]bool{
+		"Inst a [1] (2 Debian:12/stable [all])":                   true,
+		"Inst a [1] (2 Debian-Security:12/stable-security [all])": true,
+		"Inst a (2 Ubuntu:24.04/noble-updates [amd64])":           true,
+		"Inst a [1] (2 bookworm [all])":                           false,
+		"Inst a [1] (2 Docker CE:bookworm [arm64])":               false,
+		"Inst a [1] (2 nginx:bookworm, Debian:12/stable [amd64])": true,
+		"Inst a [1] (2 packages.sury.org:bookworm [amd64]) []":    false,
+		"Inst a": true,
+	} {
+		if got := distroOrigin(line); got != want {
+			t.Errorf("distroOrigin(%q) = %v, want %v", line, got, want)
+		}
+	}
+}
+
 func TestUpdates_AptFails(t *testing.T) {
 	c := updatesWith(t, fixture(t, nil), "apt-get", fakeCmd{"apt-get -s -o Debug::NoLocking=1 dist-upgrade": {code: 100}})
 	pts, _ := c.Collect(context.Background())

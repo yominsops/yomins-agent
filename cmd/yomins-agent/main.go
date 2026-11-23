@@ -42,6 +42,10 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "smart-scan" {
 		return runSmartScan(os.Args[2:])
 	}
+	// The root restart timer: services still running replaced code.
+	if len(os.Args) > 1 && os.Args[1] == "restart-scan" {
+		return runRestartScan(os.Args[2:])
+	}
 
 	// 1. Load and validate configuration.
 	cfg, err := config.Load()
@@ -240,6 +244,7 @@ func allCollectors(cfg *config.Config) []collector.Collector {
 			collector.Every(time.Hour, collector.NewCertsCollector(paths, nil)),
 			collector.NewHardwareCollector(paths),
 			collector.NewSMARTCollector(filepath.Join(cfg.StateDir, "smart.json")),
+			collector.NewRestartCollector(filepath.Join(cfg.StateDir, "restart.json")),
 			collector.NewCloudLinuxCollector(paths),
 		)
 	}
@@ -321,10 +326,15 @@ func runUninstall() error {
 	run("Stopping service", func() error { return runCmd("systemctl", "stop", serviceName) })
 	run("Disabling service", func() error { return runCmd("systemctl", "disable", serviceName) })
 	run("Disabling SMART timer", func() error { return runCmd("systemctl", "disable", "--now", "yomins-agent-smart.timer") })
+	run("Disabling restart timer", func() error { return runCmd("systemctl", "disable", "--now", "yomins-agent-restart.timer") })
 	run("Removing service file", func() error { return os.Remove(serviceFile) })
 	run("Removing SMART units", func() error {
 		_ = os.Remove("/etc/systemd/system/yomins-agent-smart.service")
 		return os.Remove("/etc/systemd/system/yomins-agent-smart.timer")
+	})
+	run("Removing restart units", func() error {
+		_ = os.Remove("/etc/systemd/system/yomins-agent-restart.service")
+		return os.Remove("/etc/systemd/system/yomins-agent-restart.timer")
 	})
 	run("Reloading systemd", func() error { return runCmd("systemctl", "daemon-reload") })
 	run("Removing config dir", func() error { return os.RemoveAll(configDir) })

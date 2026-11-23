@@ -78,6 +78,9 @@ check(re.search(r'^security_accounts\{[^}]*kind="uid0_extra"', metrics, re.M) is
 check(re.search(r'^security_firewall_enabled', metrics, re.M) is not None, "security_firewall_enabled")
 # The root SMART timer wrote its report (a container has no disks with SMART).
 check(re.search(r'^smart_smartctl_installed', metrics, re.M) is not None, "smart_smartctl_installed (SMART timer report)")
+# The root restart timer read /proc and wrote its report.
+check(re.search(r'^restart_scan_ok\{[^}]*\} 1', metrics, re.M) is not None or re.search(r'^restart_scan_ok 1', metrics, re.M) is not None, "restart_scan_ok 1 (restart timer report)")
+check(re.search(r'^system_services_restart_required', metrics, re.M) is not None, "system_services_restart_required")
 check(count("network.connection_open", lambda e: (e.get("network") or {}).get("local_port") == 2222) >= 1,
       "network.connection_open :2222")
 

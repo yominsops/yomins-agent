@@ -1,0 +1,34 @@
+[Unit]
+Description=Yomins agent: services still running replaced code
+Documentation=https://github.com/yominsops/yomins-agent#services-to-restart
+# Only next to an installed agent, whose state directory gets the report.
+ConditionPathIsDirectory=/var/lib/yomins/agent
+
+[Service]
+Type=oneshot
+# Reading other processes' /proc/<pid>/maps needs ptrace access
+# (CAP_SYS_PTRACE), which the agent does not have. This unit only reads
+# /proc and writes /var/lib/yomins/agent/restart.json, which the
+# unprivileged agent reads. No config, token or network.
+ExecStart=/usr/local/bin/yomins-agent restart-scan --out /var/lib/yomins/agent/restart.json
+TimeoutStartSec=5min
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=true
+PrivateNetwork=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/yomins/agent
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# SYS_PTRACE: read other processes' maps. DAC_READ_SEARCH: open them and
+# their cgroup whatever the owner. DAC_OVERRIDE: write into the agent's 0700
+# state directory.
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
