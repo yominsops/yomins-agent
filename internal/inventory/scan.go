@@ -25,6 +25,28 @@ type Env struct {
 	// mounts are the host directories mounted into containers, for the
 	// site scan (set by dockerContainers).
 	mounts []string
+	// containers are the running containers' roots, for the web server
+	// configurations inside them (set by dockerContainers).
+	containers []containerRoot
+}
+
+// containerRoot is a running container seen from the host.
+type containerRoot struct {
+	root   string      // /proc/<pid>/root
+	mounts [][2]string // container path → host path
+}
+
+// hostPath maps a path inside the container to the host's directory it is
+// mounted from, "" when no mount covers it.
+func (c containerRoot) hostPath(p string) string {
+	best, host := "", ""
+	for _, m := range c.mounts {
+		dst := strings.TrimSuffix(m[0], "/")
+		if (p == dst || strings.HasPrefix(p, dst+"/")) && len(dst) > len(best) {
+			best, host = dst, filepath.Join(m[1], strings.TrimPrefix(p, dst))
+		}
+	}
+	return host
 }
 
 // Path maps an absolute path into the scanned system.

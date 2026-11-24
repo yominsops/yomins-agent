@@ -45,9 +45,11 @@ type dockerSummary struct {
 
 type dockerInspect struct {
 	State struct {
-		Pid       int    `json:"Pid"`
-		StartedAt string `json:"StartedAt"`
-		Health    *struct {
+		Pid        int    `json:"Pid"`
+		StartedAt  string `json:"StartedAt"`
+		FinishedAt string `json:"FinishedAt"`
+		ExitCode   int    `json:"ExitCode"`
+		Health     *struct {
 			Status string `json:"Status"`
 		} `json:"Health"`
 	} `json:"State"`
@@ -56,8 +58,9 @@ type dockerInspect struct {
 		Env   []string `json:"Env"`
 	} `json:"Config"`
 	Mounts []struct {
-		Type   string `json:"Type"`
-		Source string `json:"Source"`
+		Type        string `json:"Type"`
+		Source      string `json:"Source"`
+		Destination string `json:"Destination"`
 	} `json:"Mounts"`
 }
 
@@ -103,7 +106,7 @@ func (dockerContainers) Detect(ctx context.Context, e *Env, r *Report) error {
 			image = image[:19] // an image no tag names any more
 		}
 		base := Component{Kind: KindContainer, Name: name, Image: image, Container: name,
-			State: clean(s.State, 20), Project: clean(s.Labels["com.docker.compose.project"], 100)}
+			State: clean(s.State, 20), ComposeProject: clean(s.Labels["com.docker.compose.project"], 100)}
 		base.Ports = containerPorts(s)
 		var in dockerInspect
 		if err := dockerGet(ctx, c, "/containers/"+url.PathEscape(s.ID)+"/json", &in); err != nil {
@@ -119,6 +122,14 @@ func (dockerContainers) Detect(ctx context.Context, e *Env, r *Report) error {
 		}
 		if in.State.Health != nil {
 			cont.Health = clean(in.State.Health.Status, 20)
+		}
+		if s.State == "exited" || s.State == "dead" {
+			code := in.State.ExitCode
+			cont.ExitCode = &code
+			if t, err := time.Parse(time.RFC3339Nano, in.State.FinishedAt); err == nil && t.Year() > 1 {
+				t = t.UTC()
+				cont.FinishedAt = &t
+			}
 		}
 		env := map[string]string{}
 		for _, kv := range in.Config.Env {
@@ -137,6 +148,19 @@ func (dockerContainers) Detect(ctx context.Context, e *Env, r *Report) error {
 			}
 		}
 		r.Components = append(r.Components, cont)
+		// A running container's web server configuration names sites too
+		// (nginx in Docker in front of PHP in another): the site scan reads
+		// it through the container's root and maps its document roots to
+		// the host's directories by the mounts.
+		if in.State.Pid > 0 && s.State == "running" {
+			cr := containerRoot{root: filepath.Join("/proc", strconv.Itoa(in.State.Pid), "root")}
+			for _, m := range in.Mounts {
+				if strings.HasPrefix(m.Source, "/") && strings.HasPrefix(m.Destination, "/") {
+					cr.mounts = append(cr.mounts, [2]string{m.Destination, m.Source})
+				}
+			}
+			e.containers = append(e.containers, cr)
+		}
 		// A site served from a container lives in a directory of the host
 		// mounted into it: the site scan looks there too.
 		for _, m := range in.Mounts {
@@ -158,7 +182,7 @@ func (dockerContainers) Detect(ctx context.Context, e *Env, r *Report) error {
 					swName = "php" // the image tells the version, not whether it is FPM
 				}
 				r.Components = append(r.Components, Component{Kind: KindService, Name: swName, Version: v, Container: name, Image: image, Source: "env",
-					State: cont.State, Project: cont.Project})
+					State: cont.State, ComposeProject: cont.ComposeProject})
 			}
 		}
 	}

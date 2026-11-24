@@ -143,6 +143,24 @@ func siteDirs(e *Env) ([]string, map[string][]string) {
 			}
 		}
 	}
+	for _, c := range e.containers {
+		for _, pattern := range webConfigs {
+			files, _ := filepath.Glob(filepath.Join(e.Path(c.root), pattern))
+			for _, f := range files {
+				b, err := os.ReadFile(f)
+				if err != nil || len(b) > maxFile {
+					continue
+				}
+				for _, v := range vhosts(b) {
+					for _, root := range v.roots {
+						if host := c.hostPath(root); host != "" {
+							names[host] = append(names[host], v.names...)
+						}
+					}
+				}
+			}
+		}
+	}
 	roots = append(roots, e.mounts...)
 	for _, pattern := range siteBases {
 		matches, _ := filepath.Glob(e.Path(pattern))

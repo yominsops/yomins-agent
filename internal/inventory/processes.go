@@ -152,7 +152,9 @@ func servicePorts(e *Env, procs []proc) portIndex {
 		}
 	}
 	for _, p := range procs {
-		if p.unit == "-" {
+		// docker-proxy holds a container's published ports: they are the
+		// container's, listed with it.
+		if p.unit == "-" || filepath.Base(p.exe) == "docker-proxy" {
 			continue
 		}
 		for _, ino := range socketInodes(e, p.pid) {

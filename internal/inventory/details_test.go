@@ -70,8 +70,21 @@ func TestProcessesStateAndPorts(t *testing.T) {
 	}
 	proc("100", "1", 500, "1001")
 	proc("101", "100", 900, "1001", "2001") // a worker holds the sockets too
+	// docker-proxy in the same unit holds a container's port: not nginx's.
+	put(t, root, "/proc/102/cgroup", "0::/system.slice/nginx.service\n", 0o644)
+	put(t, root, "/proc/102/stat", stat("102", "100", 900), 0o644)
+	if err := os.Symlink("/usr/bin/docker-proxy", filepath.Join(root, "proc", "102", "exe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "proc", "102", "fd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("socket:[3001]", filepath.Join(root, "proc", "102", "fd", "3")); err != nil {
+		t.Fatal(err)
+	}
 	put(t, root, "/proc/net/tcp", `  sl  local_address rem_address   st
    0: 00000000:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1001 1
+   1: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 3001 1
 `, 0o644)
 	put(t, root, "/proc/net/tcp6", `  sl  local_address rem_address   st
    0: 00000000000000000000000000000000:01BB 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 2001 1
@@ -264,5 +277,29 @@ func TestContainerPorts(t *testing.T) {
 	got := containerPorts(s)
 	if len(got) != 1 || got[0] != (Port{Proto: "tcp", Addr: "0.0.0.0", Port: 8080, Target: 80}) {
 		t.Errorf("got %+v", got)
+	}
+}
+
+func TestContainerVhostDomains(t *testing.T) {
+	root := t.TempDir()
+	// nginx runs in a container; its config names the site, whose root
+	// /var/www/html is the host's /srv/site mounted in.
+	put(t, root, "/proc/42/root/etc/nginx/conf.d/site.conf", "server {\n  server_name example.com www.example.com;\n  root /var/www/html;\n}\n", 0o644)
+	put(t, root, "/srv/site/wp-includes/version.php", "$wp_version = '6.8.3';", 0o644)
+	e := &Env{Root: root, mounts: []string{"/srv/site"},
+		containers: []containerRoot{{root: "/proc/42/root", mounts: [][2]string{{"/var/www/html", "/srv/site"}, {"/var/www", "/srv"}}}}}
+	r := Report{}
+	if err := (webApps{}).Detect(context.Background(), e, &r); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Components) != 1 || r.Components[0].Path != "/srv/site" ||
+		!reflect.DeepEqual(r.Components[0].Domains, []string{"example.com", "www.example.com"}) {
+		t.Errorf("got %+v", r.Components)
+	}
+	c := e.containers[0]
+	for in, want := range map[string]string{"/var/www/html/blog": "/srv/site/blog", "/var/www/x": "/srv/x", "/etc/nginx": ""} {
+		if got := c.hostPath(in); got != want {
+			t.Errorf("hostPath(%s) = %q, want %q", in, got, want)
+		}
 	}
 }

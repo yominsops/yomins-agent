@@ -130,8 +130,11 @@ type Component struct {
 	StartedAt *time.Time `json:"started_at,omitempty"`
 	// Ports it listens on (services) or publishes (containers).
 	Ports []Port `json:"ports,omitempty"`
-	// Project is a container's Docker Compose project.
-	Project string `json:"project,omitempty"`
+	// ComposeProject is a container's Docker Compose project.
+	ComposeProject string `json:"compose_project,omitempty"`
+	// ExitCode and FinishedAt: how and when a stopped container ended.
+	ExitCode   *int       `json:"exit_code,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	// Domains are the site's names from the web server's configuration,
 	// the hosting panel's directory or the CMS settings (webapp, framework).
 	Domains []string `json:"domains,omitempty"`
