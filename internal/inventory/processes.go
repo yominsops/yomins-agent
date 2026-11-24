@@ -29,6 +29,7 @@ func (*processes) Name() string { return "processes" }
 type running struct {
 	exe   string
 	units map[string]bool
+	pids  []int // its main processes
 }
 
 func (*processes) Detect(ctx context.Context, e *Env, r *Report) error {
@@ -78,7 +79,10 @@ func (*processes) Detect(ctx context.Context, e *Env, r *Report) error {
 		if p.unit != "" {
 			r.units[p.unit] = true
 		}
+		r.pids = append(r.pids, p.pid)
 	}
+	ports := servicePorts(e, procs)
+	btime := bootTime(e)
 	exes := make([]string, 0, len(byExe))
 	for exe := range byExe {
 		exes = append(exes, exe)
@@ -89,7 +93,17 @@ func (*processes) Detect(ctx context.Context, e *Env, r *Report) error {
 	for _, exe := range exes {
 		p := byExe[exe]
 		base := filepath.Base(exe)
-		c := Component{Kind: KindService, Name: clean(base, 60), Path: clean(exe, 200), Unit: firstUnit(p.units)}
+		c := Component{Kind: KindService, Name: clean(base, 60), Path: clean(exe, 200), Unit: firstUnit(p.units), State: StateRunning}
+		for _, pid := range p.pids {
+			if t := startTime(e, pid, btime); t != nil && (c.StartedAt == nil || t.Before(*c.StartedAt)) {
+				c.StartedAt = t
+			}
+		}
+		if c.Unit != "" {
+			c.Ports = ports.byUnit[c.Unit]
+		} else {
+			c.Ports = ports.byExe[exe]
+		}
 		s, isKnown := lookupKnown(base)
 		if isKnown {
 			c.Name = s.name
@@ -111,6 +125,54 @@ func (*processes) Detect(ctx context.Context, e *Env, r *Report) error {
 		r.Components = append(r.Components, c)
 	}
 	return nil
+}
+
+type portIndex struct {
+	byUnit map[string][]Port // every process of a service: nginx's workers hold its sockets
+	byExe  map[string][]Port // programs outside a service
+}
+
+// servicePorts finds the ports the host's processes listen on.
+func servicePorts(e *Env, procs []proc) portIndex {
+	ix := portIndex{byUnit: map[string][]Port{}, byExe: map[string][]Port{}}
+	lis := listeners(e)
+	if len(lis) == 0 {
+		return ix
+	}
+	// A unit name never starts with "/", an executable always does: one
+	// set of seen ports serves both maps.
+	seen := map[string]map[Port]bool{}
+	add := func(m map[string][]Port, key string, pt Port) {
+		if seen[key] == nil {
+			seen[key] = map[Port]bool{}
+		}
+		if !seen[key][pt] && len(m[key]) < maxPorts {
+			seen[key][pt] = true
+			m[key] = append(m[key], pt)
+		}
+	}
+	for _, p := range procs {
+		if p.unit == "-" {
+			continue
+		}
+		for _, ino := range socketInodes(e, p.pid) {
+			pt, ok := lis[ino]
+			if !ok {
+				continue
+			}
+			if p.unit != "" {
+				add(ix.byUnit, p.unit, pt)
+			} else {
+				add(ix.byExe, p.exe, pt)
+			}
+		}
+	}
+	for _, m := range []map[string][]Port{ix.byUnit, ix.byExe} {
+		for _, ps := range m {
+			sortPorts(ps)
+		}
+	}
+	return ix
 }
 
 // parentPID reads the parent from /proc/<pid>/stat ("pid (comm) state ppid …";

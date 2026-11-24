@@ -47,8 +47,38 @@ type Report struct {
 	// Components are the software worth showing: services, containers,
 	// programs outside the package manager, web applications.
 	Components []Component `json:"components"`
+	// Updates are the packages with a newer version in the repositories
+	// (security ones marked), as the package manager sees them at the scan.
+	Updates []Update `json:"updates,omitempty"`
 	// Errors has one entry per detector that failed; the others still report.
 	Errors map[string]string `json:"errors,omitempty"`
+}
+
+// Update is one package with a newer version available.
+type Update struct {
+	Name    string `json:"name"`
+	Version string `json:"version"` // the version it would be updated to
+	// Security: the update comes from the distribution's security
+	// repository or an advisory of the security kind.
+	Security bool `json:"security,omitempty"`
+	// Origin is the repository it comes from (Debian-Security, sury.org…).
+	Origin string `json:"origin,omitempty"`
+}
+
+// States of a Component.
+const (
+	StateRunning = "running"
+	StateStopped = "stopped" // an enabled service that does not run
+	StateFailed  = "failed"  // a service systemd marks failed
+)
+
+// Port is one port a component listens on.
+type Port struct {
+	Proto string `json:"proto"`          // tcp | udp
+	Addr  string `json:"addr,omitempty"` // 0.0.0.0, ::, 127.0.0.1
+	Port  int    `json:"port"`           // on the host
+	// Target is the container's port a published port leads to.
+	Target int `json:"target,omitempty"`
 }
 
 // OS is the distribution, from /etc/os-release.
@@ -90,6 +120,21 @@ type Component struct {
 	Source string `json:"source,omitempty"`
 	// Detail is a short note: the distribution inside a container.
 	Detail string `json:"detail,omitempty"`
+
+	// State is running, stopped or failed for services; a container's
+	// Docker state (running, exited, paused, restarting…). "" when unknown.
+	State string `json:"state,omitempty"`
+	// Health is a container's health check status (healthy, unhealthy).
+	Health string `json:"health,omitempty"`
+	// StartedAt is when the service's main process or the container started.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	// Ports it listens on (services) or publishes (containers).
+	Ports []Port `json:"ports,omitempty"`
+	// Project is a container's Docker Compose project.
+	Project string `json:"project,omitempty"`
+	// Domains are the site's names from the web server's configuration,
+	// the hosting panel's directory or the CMS settings (webapp, framework).
+	Domains []string `json:"domains,omitempty"`
 }
 
 var safeValue = regexp.MustCompile(`[^0-9A-Za-z.+:~_@/ ()-]`)

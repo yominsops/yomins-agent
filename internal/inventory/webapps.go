@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -91,12 +92,21 @@ var (
 )
 
 func (webApps) Detect(_ context.Context, e *Env, r *Report) error {
-	dirs := siteDirs(e)
+	dirs, names := siteDirs(e)
 	for _, d := range dirs {
+		var found []Component
 		if c, ok := detectCMS(e, d); ok {
-			r.Components = append(r.Components, c)
+			found = append(found, c)
 		}
-		r.Components = append(r.Components, composerFrameworks(e, d)...)
+		found = append(found, composerFrameworks(e, d)...)
+		if len(found) == 0 {
+			continue
+		}
+		domains := siteDomains(e, d, names)
+		for i := range found {
+			found[i].Domains = domains
+		}
+		r.Components = append(r.Components, found...)
 	}
 	return nil
 }
@@ -104,14 +114,22 @@ func (webApps) Detect(_ context.Context, e *Env, r *Report) error {
 // siteDirs: the document roots, their parents (a framework's composer.lock
 // sits above public/), the usual site places and one level under each
 // document root (phpMyAdmin in /var/www/html/phpmyadmin).
-func siteDirs(e *Env) []string {
+//
+// names maps a document root to the site names the configuration gives it.
+func siteDirs(e *Env) ([]string, map[string][]string) {
 	var roots []string
+	names := map[string][]string{}
 	for _, pattern := range webConfigs {
 		files, _ := filepath.Glob(e.Path(pattern))
 		for _, f := range files {
 			b, err := os.ReadFile(f)
 			if err != nil || len(b) > maxFile {
 				continue
+			}
+			for _, v := range vhosts(b) {
+				for _, root := range v.roots {
+					names[root] = append(names[root], v.names...)
+				}
 			}
 			for _, re := range []*regexp.Regexp{nginxRoot, apacheRoot, lswsRoot} {
 				for _, m := range re.FindAllSubmatch(b, -1) {
@@ -170,6 +188,132 @@ func siteDirs(e *Env) []string {
 				n++
 			}
 		}
+	}
+	sort.Strings(out)
+	return out, names
+}
+
+// vhost is one virtual host of a web server configuration.
+type vhost struct {
+	names []string // server_name, ServerName, ServerAlias
+	roots []string // root, DocumentRoot
+}
+
+var (
+	nginxServer     = regexp.MustCompile(`(?m)(?:^|[\s;{}])server\s*\{`)
+	nginxServerName = regexp.MustCompile(`(?m)^\s*server_name\s+([^;]+);`)
+	apacheVHost     = regexp.MustCompile(`(?is)<VirtualHost[^>]*>(.*?)</VirtualHost>`)
+	apacheName      = regexp.MustCompile(`(?mi)^\s*Server(?:Name|Alias)\s+(.+)$`)
+	confComment     = regexp.MustCompile(`(?m)#.*$`)
+)
+
+// vhosts finds the virtual hosts of an nginx or Apache configuration file:
+// nginx server { } blocks (with their location blocks) and Apache
+// <VirtualHost> sections.
+func vhosts(b []byte) []vhost {
+	text := confComment.ReplaceAllString(string(b), "")
+	var out []vhost
+	roots := func(body string, res ...*regexp.Regexp) []string {
+		var rs []string
+		for _, re := range res {
+			for _, m := range re.FindAllStringSubmatch(body, -1) {
+				if p := m[1]; !strings.ContainsAny(p, "$%{") && strings.HasPrefix(p, "/") {
+					rs = append(rs, filepath.Clean(p))
+				}
+			}
+		}
+		return rs
+	}
+	for _, loc := range nginxServer.FindAllStringIndex(text, -1) {
+		start := loc[1] // just after "{"
+		depth, end := 1, -1
+		for i := start; i < len(text) && end < 0; i++ {
+			switch text[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					end = i
+				}
+			}
+		}
+		if end < 0 {
+			continue
+		}
+		body := text[start:end]
+		var v vhost
+		for _, m := range nginxServerName.FindAllStringSubmatch(body, -1) {
+			v.names = append(v.names, strings.Fields(m[1])...)
+		}
+		v.roots = roots(body, nginxRoot)
+		if len(v.names) > 0 && len(v.roots) > 0 {
+			out = append(out, v)
+		}
+	}
+	for _, m := range apacheVHost.FindAllStringSubmatch(text, -1) {
+		var v vhost
+		for _, n := range apacheName.FindAllStringSubmatch(m[1], -1) {
+			v.names = append(v.names, strings.Fields(n[1])...)
+		}
+		v.roots = roots(m[1], apacheRoot)
+		if len(v.names) > 0 && len(v.roots) > 0 {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// panelSite finds the site name in the directories hosting panels make.
+var panelSite = []*regexp.Regexp{
+	regexp.MustCompile(`^/var/www/vhosts/([^/]+)/httpdocs(/|$)`),        // Plesk
+	regexp.MustCompile(`^/home/[^/]+/web/([^/]+)/public_html(/|$)`),     // Vesta, Hestia
+	regexp.MustCompile(`^/home/[^/]+/domains/([^/]+)/public_html(/|$)`), // DirectAdmin
+	regexp.MustCompile(`^/var/www/[^/]+/data/www/([^/]+)(/|$)`),         // ISPmanager
+}
+
+var wpURL = regexp.MustCompile(`define\(\s*['"](?:WP_HOME|WP_SITEURL)['"]\s*,\s*['"](https?://[^'"]+)['"]`)
+
+var domainRe = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z][a-z0-9-]{0,62}$`)
+
+// maxDomains bounds the names listed for one site.
+const maxDomains = 20
+
+// siteDomains are the names a site directory is served under: from the web
+// server's virtual hosts whose root is the directory or one directly in it
+// (a framework's public/), from the hosting panel's directory layout and
+// from WordPress's WP_HOME / WP_SITEURL.
+func siteDomains(e *Env, dir string, names map[string][]string) []string {
+	var all []string
+	for root, ns := range names {
+		if root == dir || filepath.Dir(root) == dir {
+			all = append(all, ns...)
+		}
+	}
+	for _, re := range panelSite {
+		if m := re.FindStringSubmatch(dir); m != nil {
+			all = append(all, m[1])
+		}
+	}
+	for _, f := range []string{filepath.Join(dir, "wp-config.php"), filepath.Join(filepath.Dir(dir), "wp-config.php")} {
+		if b, err := e.ReadFile(f, 1<<20); err == nil {
+			for _, m := range wpURL.FindAllStringSubmatch(string(b), -1) {
+				if u, err := url.Parse(m[1]); err == nil {
+					all = append(all, u.Hostname())
+				}
+			}
+			break
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, n := range all {
+		n = strings.ToLower(strings.TrimSuffix(strings.Trim(n, `"'`), "."))
+		if seen[n] || !domainRe.MatchString(n) || len(out) >= maxDomains {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
 	}
 	sort.Strings(out)
 	return out

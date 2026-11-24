@@ -30,15 +30,26 @@ var dockerSockets = []string{"/var/run/docker.sock", "/run/podman/podman.sock"}
 const maxContainers = 200
 
 type dockerSummary struct {
-	ID    string   `json:"Id"`
-	Names []string `json:"Names"`
-	Image string   `json:"Image"`
-	State string   `json:"State"`
+	ID     string            `json:"Id"`
+	Names  []string          `json:"Names"`
+	Image  string            `json:"Image"`
+	State  string            `json:"State"`
+	Labels map[string]string `json:"Labels"`
+	Ports  []struct {
+		IP          string `json:"IP"`
+		PrivatePort int    `json:"PrivatePort"`
+		PublicPort  int    `json:"PublicPort"`
+		Type        string `json:"Type"`
+	} `json:"Ports"`
 }
 
 type dockerInspect struct {
 	State struct {
-		Pid int `json:"Pid"`
+		Pid       int    `json:"Pid"`
+		StartedAt string `json:"StartedAt"`
+		Health    *struct {
+			Status string `json:"Status"`
+		} `json:"Health"`
 	} `json:"State"`
 	Config struct {
 		Image string   `json:"Image"`
@@ -71,7 +82,8 @@ func (dockerContainers) Detect(ctx context.Context, e *Env, r *Report) error {
 		}},
 	}
 	var list []dockerSummary
-	if err := dockerGet(ctx, c, "/containers/json", &list); err != nil {
+	// Stopped containers too: a compose service that exited is worth seeing.
+	if err := dockerGet(ctx, c, "/containers/json?all=1", &list); err != nil {
 		return err
 	}
 	for i, s := range list {
@@ -90,12 +102,24 @@ func (dockerContainers) Detect(ctx context.Context, e *Env, r *Report) error {
 		if strings.HasPrefix(image, "sha256:") && len(image) > 19 {
 			image = image[:19] // an image no tag names any more
 		}
+		base := Component{Kind: KindContainer, Name: name, Image: image, Container: name,
+			State: clean(s.State, 20), Project: clean(s.Labels["com.docker.compose.project"], 100)}
+		base.Ports = containerPorts(s)
 		var in dockerInspect
 		if err := dockerGet(ctx, c, "/containers/"+url.PathEscape(s.ID)+"/json", &in); err != nil {
-			r.Components = append(r.Components, Component{Kind: KindContainer, Name: name, Image: image, Container: name})
+			r.Components = append(r.Components, base)
 			continue
 		}
-		cont := Component{Kind: KindContainer, Name: name, Image: image, Container: name, Version: cleanVersion(imageTag(image))}
+		cont := base
+		cont.Version = cleanVersion(imageTag(image))
+		// A stopped container's start time is of a run that is over.
+		if t, err := time.Parse(time.RFC3339Nano, in.State.StartedAt); err == nil && t.Year() > 1 && s.State == "running" {
+			t = t.UTC()
+			cont.StartedAt = &t
+		}
+		if in.State.Health != nil {
+			cont.Health = clean(in.State.Health.Status, 20)
+		}
 		env := map[string]string{}
 		for _, kv := range in.Config.Env {
 			if k, v, ok := strings.Cut(kv, "="); ok {
@@ -133,11 +157,34 @@ func (dockerContainers) Detect(ctx context.Context, e *Env, r *Report) error {
 				if swName == "php-fpm" {
 					swName = "php" // the image tells the version, not whether it is FPM
 				}
-				r.Components = append(r.Components, Component{Kind: KindService, Name: swName, Version: v, Container: name, Image: image, Source: "env"})
+				r.Components = append(r.Components, Component{Kind: KindService, Name: swName, Version: v, Container: name, Image: image, Source: "env",
+					State: cont.State, Project: cont.Project})
 			}
 		}
 	}
 	return nil
+}
+
+// containerPorts are the ports a container publishes on the host.
+func containerPorts(s dockerSummary) []Port {
+	var out []Port
+	seen := map[Port]bool{}
+	for _, p := range s.Ports {
+		if p.PublicPort <= 0 || len(out) >= maxPorts {
+			continue
+		}
+		proto := p.Type
+		if proto != "udp" && proto != "sctp" {
+			proto = "tcp"
+		}
+		pt := Port{Proto: proto, Addr: clean(p.IP, 45), Port: p.PublicPort, Target: p.PrivatePort}
+		if !seen[pt] {
+			seen[pt] = true
+			out = append(out, pt)
+		}
+	}
+	sortPorts(out)
+	return out
 }
 
 func dockerGet(ctx context.Context, c *http.Client, path string, v any) error {

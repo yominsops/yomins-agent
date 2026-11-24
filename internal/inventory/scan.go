@@ -78,8 +78,10 @@ func Detectors() []Detector {
 		rpmPackages{},
 		&processes{},
 		dockerContainers{},
+		stoppedServices{}, // after processes: it skips the units that run
 		localBinaries{},
 		webApps{},
+		pendingUpdates{},
 	}
 }
 

@@ -105,6 +105,7 @@ func (s *Sender) Tick(ctx context.Context) bool {
 	w := gzip.NewWriter(&gz)
 	_, _ = w.Write(body)
 	_ = w.Close()
+	size := gz.Len() // the request reads the buffer empty
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.Server+"/inventory", &gz)
 	if err != nil {
 		return false
@@ -124,7 +125,7 @@ func (s *Sender) Tick(ctx context.Context) bool {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		b, _ := json.Marshal(sentState{Hash: hash, SentAt: s.now().UTC()})
 		_ = os.WriteFile(s.statePath(), b, 0o600)
-		slog.Info("inventory: sent", "bytes", gz.Len())
+		slog.Info("inventory: sent", "bytes", size)
 		return true
 	case resp.StatusCode == http.StatusNotFound:
 		// An ingest server without inventory: ask again in a few hours.

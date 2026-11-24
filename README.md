@@ -208,10 +208,12 @@ What runs on the server, for the server page and for matching against vulnerabil
 |---|---|
 | OS | `/etc/os-release`: id, version, codename |
 | Packages | Every installed package with its version and source package: dpkg (read from `/var/lib/dpkg/status`) or rpm |
-| Services | Programs running in a systemd service (and known ones outside one): name, version, the package they come from, unit. Version from the package, or from the program (`nginx -v`) when it was installed by hand |
-| Containers | Running containers (Docker or Podman API, read only): image, the distribution inside, and the versions official images set in their environment (`PHP_VERSION`, `NGINX_VERSION`, …) |
+| Services | Programs running in a systemd service (and known ones outside one): name, version, the package they come from, unit, start time of the main process and the ports the service listens on (`/proc/net/{tcp,udp}*` matched to the processes' sockets). Version from the package, or from the program (`nginx -v`) when it was installed by hand |
+| Stopped services | Known software whose unit is enabled but inactive (`stopped`) or failed (`failed`), from `systemctl`. Oneshot units and units that start an interpreter (python, node…) are left out |
+| Containers | All containers, stopped ones too (Docker or Podman API, read only): state, health, start time, published ports, Compose project (`com.docker.compose.project`), image, the distribution inside, and the versions official images set in their environment (`PHP_VERSION`, `NGINX_VERSION`, …) |
 | Programs outside packages | ELF executables in `/usr/local/{bin,sbin}` and `/opt/*/bin` that no package owns |
-| Web applications | The core version of CMS and frameworks in the sites' directories (web server document roots, the usual hosting panel places, directories mounted into containers): WordPress, Joomla, Drupal, Magento, Bitrix, OpenCart, PrestaShop, Nextcloud, phpMyAdmin, Roundcube, MediaWiki, Moodle, TYPO3, DLE; Laravel, Symfony, Yii, CodeIgniter, CakePHP, Laminas, Slim from `composer.lock`. No plugins or extensions |
+| Web applications | The core version of CMS and frameworks in the sites' directories (web server document roots, the usual hosting panel places, directories mounted into containers): WordPress, Joomla, Drupal, Magento, Bitrix, OpenCart, PrestaShop, Nextcloud, phpMyAdmin, Roundcube, MediaWiki, Moodle, TYPO3, DLE; Laravel, Symfony, Yii, CodeIgniter, CakePHP, Laminas, Slim from `composer.lock`. No plugins or extensions. Each with the site's domains: `server_name` / `ServerName` / `ServerAlias` of the virtual host whose root is the directory (or its `public/`), the hosting panel's directory name (Plesk, Hestia, DirectAdmin, ISPmanager), WordPress `WP_HOME` / `WP_SITEURL` |
+| Updates | Packages with a newer version in the repositories, from the package manager's cached data (`apt-get -s dist-upgrade`, `dnf`/`yum check-update`): new version, origin, and whether it is a security update |
 
 Each part is a detector (`internal/inventory`); one that fails is named in the report's `errors` and the others still report.
 
