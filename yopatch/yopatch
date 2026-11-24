@@ -90,6 +90,12 @@ changed_since() {
     comm -13 "$1" <(installed_versions) | cut -d= -f1
 }
 
+# rescan — refresh the agent's restart report after changing things, so the next
+# plan sees what is still running replaced code (the timer runs it only hourly).
+rescan() {
+    systemctl start yomins-agent-restart.service >/dev/null 2>&1 || true
+}
+
 reboot_required() {
     if [ -f /run/reboot-required ]; then echo true; return; fi
     local newest
@@ -129,6 +135,7 @@ security)
     unattended-upgrade >>"$LOG" 2>&1 || rc=$?
     mapfile -t changed < <(changed_since "$before")
     rm -f "$before"
+    rescan
     log "security: exit $rc, ${#changed[@]} package(s) changed: ${changed[*]:-}"
     printf '{"ok":%s,"verb":"security","exit":%d,"changed":%s,"reboot_required":%s}\n' \
         "$([ $rc -eq 0 ] && echo true || echo false)" "$rc" "$(json_list "${changed[@]}")" "$(reboot_required)"
@@ -147,6 +154,7 @@ upgrade)
     apt-get install -y -q --only-upgrade -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef "${args[@]}" >>"$LOG" 2>&1 || rc=$?
     mapfile -t changed < <(changed_since "$before")
     rm -f "$before"
+    rescan
     log "upgrade: exit $rc, changed: ${changed[*]:-}"
     printf '{"ok":%s,"verb":"upgrade","exit":%d,"changed":%s}\n' \
         "$([ $rc -eq 0 ] && echo true || echo false)" "$rc" "$(json_list "${changed[@]}")"
@@ -163,6 +171,7 @@ restart)
         log "restart: $u"
         if systemctl restart "$u" && sleep 2 && systemctl is-active --quiet "$u"; then ok+=("$u"); else bad+=("$u"); fi
     done
+    rescan
     log "restart: active ${ok[*]:-} failed ${bad[*]:-}"
     printf '{"ok":%s,"verb":"restart","active":%s,"failed":%s}\n' \
         "$([ ${#bad[@]} -eq 0 ] && echo true || echo false)" "$(json_list "${ok[@]}")" "$(json_list "${bad[@]}")"
