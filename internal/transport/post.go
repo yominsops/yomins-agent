@@ -83,6 +83,9 @@ func (p *Poster) Post(ctx context.Context, path, contentType string, headers map
 	case s >= 200 && s < 300:
 		p.session.accepted(resp)
 		return nil
+	case blockedInTransit(resp):
+		logBlocked(resp)
+		return &RefusedError{Status: s}
 	case s == http.StatusUnauthorized || s == http.StatusForbidden:
 		rej := rejection(resp)
 		p.session.reject(rej)

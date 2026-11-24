@@ -194,3 +194,51 @@ func TestEventFlush_DropsBatchTheServerRefuses(t *testing.T) {
 		t.Errorf("%d events re-queued, want 0", n)
 	}
 }
+
+// A WAF in front of the server answers 403 with an HTML page: only that
+// payload is dropped, the agent keeps pushing. The server's own 403 still
+// pauses every push.
+func TestPoster_ProxyBlockDropsOnlyThePayload(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		b, _ := io.ReadAll(r.Body)
+		switch {
+		case strings.Contains(string(b), "attack"):
+			w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+			w.Header().Set("Cf-Ray", "abc-FRA")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("<!DOCTYPE html><title>Attention Required!</title>"))
+		case strings.Contains(string(b), "revoked"):
+			w.Header().Set(reasonHeader, "token_revoked")
+			http.Error(w, "token revoked", http.StatusForbidden)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+	s := NewSession()
+	p := NewPoster(srv.URL, "t", false, s)
+	ctx := context.Background()
+
+	var refused *RefusedError
+	if err := p.Post(ctx, "/logs", "application/x-ndjson", nil, []byte("GET /?q=attack")); !errors.As(err, &refused) || refused.Status != 403 {
+		t.Fatalf("blocked payload: %v", err)
+	}
+	if s.Paused() {
+		t.Fatal("a proxy block paused the agent")
+	}
+	if err := p.Post(ctx, "/logs", "application/x-ndjson", nil, []byte("fine")); err != nil {
+		t.Fatalf("next payload: %v", err)
+	}
+	var rej *RejectedError
+	if err := p.Post(ctx, "/logs", "application/x-ndjson", nil, []byte("revoked")); !errors.As(err, &rej) || rej.Reason != "token_revoked" {
+		t.Fatalf("server rejection: %v", err)
+	}
+	if !s.Paused() {
+		t.Fatal("the server's own 403 must pause pushes")
+	}
+	if calls.Load() != 3 {
+		t.Errorf("calls = %d", calls.Load())
+	}
+}

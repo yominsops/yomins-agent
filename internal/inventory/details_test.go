@@ -225,6 +225,11 @@ server {
     server_name ~^(?<sub>.+)\.example\.net$;
     root /var/www/$sub;
 }
+server {
+    set                $base /var/www/metro;
+    server_name        metro.example.com *.metro.example.com;
+    root               $base;
+}
 `, 0o644)
 	put(t, root, "/etc/apache2/sites-enabled/blog.conf", `<VirtualHost *:80>
   ServerName blog.example.com
@@ -238,6 +243,8 @@ server {
 	put(t, root, "/srv/app/public/index.php", "<?php", 0o644)
 	put(t, root, "/srv/app/composer.lock", `{"packages":[{"name":"laravel/framework","version":"v11.9.2"}]}`, 0o644)
 	put(t, root, "/var/www/vhosts/plesk.example.com/httpdocs/wp-includes/version.php", "$wp_version = '6.8.3';", 0o644)
+	put(t, root, "/var/www/metro/wp-includes/version.php", "$wp_version = '7.1.4';", 0o644)
+	put(t, root, "/var/www/metro/blog/wp-includes/version.php", "$wp_version = '6.8.3';", 0o644)
 
 	r := Report{}
 	if err := (webApps{}).Detect(context.Background(), &Env{Root: root}, &r); err != nil {
@@ -252,6 +259,8 @@ server {
 		"/var/www/blog": {"blog.example.com", "www.blog.example.com"},
 		"/srv/app":      {"app.example.org"},
 		"/var/www/vhosts/plesk.example.com/httpdocs": {"plesk.example.com"},
+		"/var/www/metro":      {"*.metro.example.com", "metro.example.com"},
+		"/var/www/metro/blog": {"*.metro.example.com", "metro.example.com"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("domains:\n got %v\nwant %v", got, want)

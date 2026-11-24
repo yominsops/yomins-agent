@@ -223,6 +223,8 @@ var (
 	apacheVHost     = regexp.MustCompile(`(?is)<VirtualHost[^>]*>(.*?)</VirtualHost>`)
 	apacheName      = regexp.MustCompile(`(?mi)^\s*Server(?:Name|Alias)\s+(.+)$`)
 	confComment     = regexp.MustCompile(`(?m)#.*$`)
+	nginxSet        = regexp.MustCompile(`(?m)^\s*set\s+\$(\w+)\s+["']?([^;"'\s]+)["']?\s*;`)
+	nginxVar        = regexp.MustCompile(`\$\{?(\w+)\}?`)
 )
 
 // vhosts finds the virtual hosts of an nginx or Apache configuration file:
@@ -232,10 +234,24 @@ func vhosts(b []byte) []vhost {
 	text := confComment.ReplaceAllString(string(b), "")
 	var out []vhost
 	roots := func(body string, res ...*regexp.Regexp) []string {
+		// nginx sites often keep the root in a variable:
+		// "set $base /home/u/www/site; root $base;".
+		vars := map[string]string{}
+		for _, m := range nginxSet.FindAllStringSubmatch(body, -1) {
+			if !strings.Contains(m[2], "$") {
+				vars[m[1]] = m[2]
+			}
+		}
 		var rs []string
 		for _, re := range res {
 			for _, m := range re.FindAllStringSubmatch(body, -1) {
-				if p := m[1]; !strings.ContainsAny(p, "$%{") && strings.HasPrefix(p, "/") {
+				p := nginxVar.ReplaceAllStringFunc(m[1], func(v string) string {
+					if val, ok := vars[nginxVar.FindStringSubmatch(v)[1]]; ok {
+						return val
+					}
+					return v
+				})
+				if !strings.ContainsAny(p, "$%{") && strings.HasPrefix(p, "/") {
 					rs = append(rs, filepath.Clean(p))
 				}
 			}
@@ -304,7 +320,9 @@ const maxDomains = 20
 func siteDomains(e *Env, dir string, names map[string][]string) []string {
 	var all []string
 	for root, ns := range names {
-		if root == dir || filepath.Dir(root) == dir {
+		// The root itself, a framework's public/ under the site, or an app
+		// in a directory of the root (example.com/blog).
+		if root == dir || filepath.Dir(root) == dir || filepath.Dir(dir) == root {
 			all = append(all, ns...)
 		}
 	}

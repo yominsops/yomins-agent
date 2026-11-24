@@ -128,6 +128,34 @@ func isRejection(err error) bool {
 // IsRejection is isRejection for callers outside the package.
 func IsRejection(err error) bool { return isRejection(err) }
 
+// blockedInTransit tells a 403 that a proxy in front of the server (a WAF
+// such as Cloudflare's) gave to one request from one the server gave to the
+// agent: the server answers in plain text and, since 2026, with
+// X-Yomins-Reason; a proxy answers with an HTML page. Such a block is about
+// that payload (a log line that looks like an attack), so only that payload
+// is dropped and the agent keeps pushing.
+func blockedInTransit(resp *http.Response) bool {
+	return resp.StatusCode == http.StatusForbidden && resp.Header.Get(reasonHeader) == "" &&
+		strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/html")
+}
+
+// logBlocked reports a payload blocked on the way, at most once a minute per path.
+var blockedLog = struct {
+	sync.Mutex
+	last map[string]time.Time
+}{last: map[string]time.Time{}}
+
+func logBlocked(resp *http.Response) {
+	path := resp.Request.URL.Path
+	blockedLog.Lock()
+	defer blockedLog.Unlock()
+	if time.Since(blockedLog.last[path]) < time.Minute {
+		return
+	}
+	blockedLog.last[path] = time.Now()
+	slog.Warn("a proxy in front of the server blocked a payload, dropped", "path", path, "status", resp.StatusCode, "ray", resp.Header.Get("Cf-Ray"))
+}
+
 // rejection builds the RejectedError for a 401/403 response.
 func rejection(resp *http.Response) *RejectedError {
 	reason := resp.Header.Get(reasonHeader)

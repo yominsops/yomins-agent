@@ -116,6 +116,12 @@ func (t *HTTPTransport) do(ctx context.Context, payload []byte) error {
 		return nil
 	}
 
+	// A proxy blocked this batch: drop it, keep pushing.
+	if blockedInTransit(resp) {
+		logBlocked(resp)
+		return backoff.Permanent(fmt.Errorf("blocked on the way (%d) for %s %s", resp.StatusCode, req.Method, req.URL))
+	}
+
 	// 401/403: the server refuses this agent; pause every push.
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		rej := rejection(resp)

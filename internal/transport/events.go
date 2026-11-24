@@ -190,6 +190,12 @@ func (t *EventHTTPTransport) doPost(ctx context.Context, payload []byte) error {
 		return nil
 	}
 
+	// A proxy blocked this batch: drop it, keep pushing.
+	if blockedInTransit(resp) {
+		logBlocked(resp)
+		return backoff.Permanent(&badBatchError{status: resp.StatusCode})
+	}
+
 	// 401/403: the server refuses this agent; pause every push.
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		rej := rejection(resp)
