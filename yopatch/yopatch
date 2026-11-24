@@ -1,0 +1,179 @@
+#!/bin/bash
+# yopatch — the only thing the maintenance automation may run on this host. The
+# agent's root job runner (yomins-agent job-run) calls it with the verb and
+# arguments of a job n8n signed; it can also be run by hand. Each verb does one
+# narrow thing and prints one JSON object:
+#
+#   plan                 what is pending: security and other updates, held
+#                        packages, services running replaced code, reboot
+#   security             install the updates unattended-upgrades would
+#                        (its own origins and holds), report what changed
+#   upgrade PKG...       upgrade these packages only; each must match
+#                        YOPATCH_ALLOW_PACKAGES (e.g. php8.3-*) and be upgradable
+#   restart UNIT...      restart these services only; each must be listed by
+#                        the agent's restart scan and not in YOPATCH_DENY_UNITS
+#   reboot               reboot in one minute
+#
+# Nothing else: no shell, no other arguments. Every call is logged to
+# /var/log/yopatch.log. Installed by the yomins-agent installer (--maintenance);
+# /etc/yopatch/yopatch.conf sets the allowed packages and the denied services.
+set -euo pipefail
+export LC_ALL=C DEBIAN_FRONTEND=noninteractive PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+CONF=/etc/yopatch/yopatch.conf
+LOG=/var/log/yopatch.log
+RESTART_REPORT=/var/lib/yomins/agent/restart.json
+YOPATCH_ALLOW_PACKAGES=""
+YOPATCH_DENY_UNITS="ssh.service sshd.service docker.service containerd.service dbus.service systemd-logind.service"
+# shellcheck source=/dev/null
+[ -r "$CONF" ] && . "$CONF"
+
+client="${YOPATCH_CALLER:-${SSH_CLIENT%% *}}"
+log() { printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${client:-local}" "$*" >>"$LOG"; }
+
+# json_list ITEMS... — a JSON array of strings that were validated to need no escaping.
+json_list() {
+    local out="" x
+    for x in "$@"; do out="${out:+$out,}\"$x\""; done
+    printf '[%s]' "$out"
+}
+
+fail() {
+    log "refused: $*"
+    printf '{"ok":false,"error":"%s"}\n' "$1"
+    exit 1
+}
+
+request="$*"
+# Package names, unit names and verbs only: anything else is refused outright.
+case "$request" in
+    *[!A-Za-z0-9@._+:\ -]*) fail "unexpected characters in the request" ;;
+esac
+read -r -a argv <<<"$request"
+verb="${argv[0]:-}"
+args=("${argv[@]:1}")
+
+exec 9>/run/yopatch.lock
+flock -w 600 9 || fail "another yopatch run is in progress"
+
+# upgradable — "name origin-label" per package an upgrade would install, holds ignored.
+upgradable() {
+    apt-get -s -o Debug::NoLocking=1 --ignore-hold dist-upgrade 2>/dev/null |
+        awk '/^Inst /{ s = ($0 ~ /-security|Debian-Security/) ? "security" : "other"; print $2, s }'
+}
+
+# restart_units — the services the agent's root scan found running replaced code.
+restart_units() {
+    [ -r "$RESTART_REPORT" ] || return 0
+    grep -o '"units":\[[^]]*\]' "$RESTART_REPORT" | sed 's/^"units":\[//; s/\]$//' | tr ',' '\n' | tr -d '"' | grep -v '^$' || true
+}
+
+denied_unit() {
+    local u
+    for u in $YOPATCH_DENY_UNITS; do [ "$1" = "$u" ] && return 0; done
+    return 1
+}
+
+allowed_package() {
+    local p
+    for p in $YOPATCH_ALLOW_PACKAGES; do
+        # shellcheck disable=SC2053 # a glob on purpose
+        [[ "$1" == $p ]] && return 0
+    done
+    return 1
+}
+
+installed_versions() { dpkg-query -W -f '${Package}=${Version}\n' 2>/dev/null | sort; }
+
+# changed_since FILE — packages whose version differs from the snapshot in FILE.
+changed_since() {
+    comm -13 "$1" <(installed_versions) | cut -d= -f1
+}
+
+reboot_required() {
+    if [ -f /run/reboot-required ]; then echo true; return; fi
+    local newest
+    newest=$(find /boot -maxdepth 1 -name 'vmlinuz-*' -printf '%T@ %f\n' 2>/dev/null | sort -rn | head -1 | sed 's/^[^ ]* vmlinuz-//')
+    if [ -n "$newest" ] && [ "$newest" != "$(uname -r)" ]; then echo true; else echo false; fi
+}
+
+case "$verb" in
+plan)
+    mapfile -t up < <(upgradable)
+    held=$(apt-mark showhold 2>/dev/null | sort)
+    sec=() other=() hold=() allowed=()
+    for line in "${up[@]}"; do
+        name="${line%% *}" kind="${line##* }"
+        if grep -qxF "$name" <<<"$held"; then hold+=("$name"); continue; fi
+        if [ "$kind" = security ]; then sec+=("$name"); else other+=("$name"); fi
+        if allowed_package "$name"; then allowed+=("$name"); fi
+    done
+    restart=()
+    while read -r u; do
+        [ -n "$u" ] && ! denied_unit "$u" && restart+=("$u")
+    done < <(restart_units)
+    . /etc/os-release
+    log "plan: ${#sec[@]} security, ${#other[@]} other, ${#hold[@]} held, ${#restart[@]} to restart"
+    printf '{"ok":true,"verb":"plan","host":"%s","os":"%s %s","security":%s,"other":%s,"held":%s,"allowed":%s,"restart":%s,"reboot_required":%s}\n' \
+        "$(hostname -f 2>/dev/null || hostname)" "$ID" "${VERSION_ID:-}" \
+        "$(json_list "${sec[@]}")" "$(json_list "${other[@]}")" "$(json_list "${hold[@]}")" \
+        "$(json_list "${allowed[@]}")" "$(json_list "${restart[@]}")" "$(reboot_required)"
+    ;;
+security)
+    [ ${#args[@]} -eq 0 ] || fail "security takes no arguments"
+    command -v unattended-upgrade >/dev/null || fail "unattended-upgrades is not installed"
+    before=$(mktemp)
+    installed_versions >"$before"
+    log "security: start"
+    rc=0
+    unattended-upgrade >>"$LOG" 2>&1 || rc=$?
+    mapfile -t changed < <(changed_since "$before")
+    rm -f "$before"
+    log "security: exit $rc, ${#changed[@]} package(s) changed: ${changed[*]:-}"
+    printf '{"ok":%s,"verb":"security","exit":%d,"changed":%s,"reboot_required":%s}\n' \
+        "$([ $rc -eq 0 ] && echo true || echo false)" "$rc" "$(json_list "${changed[@]}")" "$(reboot_required)"
+    ;;
+upgrade)
+    [ ${#args[@]} -gt 0 ] || fail "upgrade needs package names"
+    mapfile -t up < <(upgradable | cut -d' ' -f1)
+    for p in "${args[@]}"; do
+        allowed_package "$p" || fail "package not allowed: $p"
+        printf '%s\n' "${up[@]}" | grep -qxF "$p" || fail "nothing to upgrade: $p"
+    done
+    before=$(mktemp)
+    installed_versions >"$before"
+    log "upgrade: ${args[*]}"
+    rc=0
+    apt-get install -y -q --only-upgrade -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef "${args[@]}" >>"$LOG" 2>&1 || rc=$?
+    mapfile -t changed < <(changed_since "$before")
+    rm -f "$before"
+    log "upgrade: exit $rc, changed: ${changed[*]:-}"
+    printf '{"ok":%s,"verb":"upgrade","exit":%d,"changed":%s}\n' \
+        "$([ $rc -eq 0 ] && echo true || echo false)" "$rc" "$(json_list "${changed[@]}")"
+    ;;
+restart)
+    [ ${#args[@]} -gt 0 ] || fail "restart needs unit names"
+    mapfile -t listed < <(restart_units)
+    for u in "${args[@]}"; do
+        denied_unit "$u" && fail "unit not allowed: $u"
+        printf '%s\n' "${listed[@]}" | grep -qxF "$u" || fail "unit does not need a restart: $u"
+    done
+    ok=() bad=()
+    for u in "${args[@]}"; do
+        log "restart: $u"
+        if systemctl restart "$u" && sleep 2 && systemctl is-active --quiet "$u"; then ok+=("$u"); else bad+=("$u"); fi
+    done
+    log "restart: active ${ok[*]:-} failed ${bad[*]:-}"
+    printf '{"ok":%s,"verb":"restart","active":%s,"failed":%s}\n' \
+        "$([ ${#bad[@]} -eq 0 ] && echo true || echo false)" "$(json_list "${ok[@]}")" "$(json_list "${bad[@]}")"
+    ;;
+reboot)
+    [ ${#args[@]} -eq 0 ] || fail "reboot takes no arguments"
+    log "reboot: in 1 minute"
+    shutdown -r +1 "yopatch: reboot requested by the maintenance automation" >/dev/null 2>&1 || fail "shutdown failed"
+    printf '{"ok":true,"verb":"reboot","in_seconds":60}\n'
+    ;;
+*)
+    fail "unknown verb"
+    ;;
+esac

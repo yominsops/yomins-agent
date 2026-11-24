@@ -1,0 +1,13 @@
+[Unit]
+Description=Yomins agent: run maintenance jobs (yopatch)
+Documentation=https://github.com/yominsops/yomins-agent#maintenance-jobs
+ConditionPathExists=/etc/yomins-agent/jobs.pub
+ConditionPathExists=/usr/local/sbin/yopatch
+
+[Service]
+Type=oneshot
+# Root: yopatch installs packages, restarts services, reboots. What it may do is
+# narrow (see /usr/local/sbin/yopatch), and it runs only jobs whose signature
+# matches /etc/yomins-agent/jobs.pub, which the unprivileged agent cannot write.
+ExecStart=/usr/local/bin/yomins-agent job-run
+TimeoutStartSec=50min

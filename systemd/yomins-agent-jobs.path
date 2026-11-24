@@ -1,0 +1,11 @@
+[Unit]
+Description=Yomins agent: run a maintenance job when one arrives
+Documentation=https://github.com/yominsops/yomins-agent#maintenance-jobs
+# Only on servers installed with --maintenance (the job key is pinned there).
+ConditionPathExists=/etc/yomins-agent/jobs.pub
+
+[Path]
+PathExistsGlob=/var/lib/yomins/agent/jobs/inbox/*.json
+
+[Install]
+WantedBy=paths.target

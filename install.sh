@@ -31,6 +31,12 @@ SKIP_CONFIRM=false
 ALLOW_HTTP=false            # dev/testing only: bypass HTTPS requirement
 IS_UPGRADE=false            # set to true when upgrading an existing install
 DO_UNINSTALL=false
+MAINTENANCE=""              # --maintenance: on, --remove-maintenance: off, else as it is
+
+# The automation's job key (n8n credential "yopatch jobs signing", ES256). Pinned
+# here, in the release, so that only jobs n8n signed run on a --maintenance
+# server: the backend and the ingest server cannot make one.
+JOBS_PUBLIC_KEY=""
 
 BINARY_NAME="yomins-agent"
 SERVICE_NAME="yomins-agent"
@@ -71,6 +77,10 @@ Options:
   --binary <PATH>       Install this agent binary instead of downloading a
                         release (tests, hosts without access to GitHub)
   --yes                 Skip confirmation prompt
+  --maintenance         Let the maintenance automation run signed jobs here
+                        (updates, restarts, reboots through yopatch): for
+                        tariffs that include server maintenance
+  --remove-maintenance  Stop taking maintenance jobs and remove yopatch
   --uninstall           Remove the agent, service, config, and state from this system
   --help                Show this help and exit
 EOF
@@ -87,6 +97,8 @@ parse_args() {
             --yes|-y)        SKIP_CONFIRM=true;    shift   ;;
             --allow-http)    ALLOW_HTTP=true;      shift   ;;
             --uninstall)     DO_UNINSTALL=true;    shift   ;;
+            --maintenance)        MAINTENANCE=on;  shift ;;
+            --remove-maintenance) MAINTENANCE=off; shift ;;
             --help|-h)   usage; exit 0 ;;
             *) die "Unknown option: $1. Run with --help for usage." ;;
         esac
@@ -423,6 +435,55 @@ install_root_timer() {
     systemctl enable --now "yomins-agent-${name}.timer" || warn "Could not start yomins-agent-${name}.timer."
 }
 
+# Maintenance jobs: yopatch, its config, the job key and the root runner
+# (yomins-agent-jobs.path starts yomins-agent-jobs.service when a job arrives).
+fetch_release_file() {
+    local name="$1" dest="$2" script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    for src in "${script_dir}/systemd/${name}" "${script_dir}/yopatch/${name}"; do
+        if [[ -f "$src" ]]; then install -m 644 "$src" "$dest"; return 0; fi
+    done
+    curl -fsSL "${RELEASES_BASE}/download/${AGENT_VERSION}/${name}" -o "$dest"
+}
+
+install_maintenance() {
+    [[ -n "$JOBS_PUBLIC_KEY" ]] || die "This installer has no job key: --maintenance is not available in ${AGENT_VERSION}."
+    info "Installing the maintenance job runner..."
+    fetch_release_file yopatch /usr/local/sbin/yopatch.new || die "Could not get yopatch."
+    head -n 1 /usr/local/sbin/yopatch.new | grep -q '^#!/bin/bash' || die "Unexpected yopatch file."
+    chmod 755 /usr/local/sbin/yopatch.new && mv /usr/local/sbin/yopatch.new /usr/local/sbin/yopatch
+    install -d -m 755 /etc/yopatch
+    if [[ ! -f /etc/yopatch/yopatch.conf ]]; then
+        cat >/etc/yopatch/yopatch.conf <<'CONF'
+# yopatch settings. Packages from outside the distribution `upgrade` may install,
+# as shell globs (e.g. "php8.3-*"); empty: none.
+YOPATCH_ALLOW_PACKAGES=""
+# Services `restart` never touches.
+YOPATCH_DENY_UNITS="ssh.service sshd.service docker.service containerd.service dbus.service systemd-logind.service"
+CONF
+        chmod 644 /etc/yopatch/yopatch.conf
+    fi
+    printf '%s\n' "$JOBS_PUBLIC_KEY" >"${CONFIG_DIR}/jobs.pub"
+    chmod 644 "${CONFIG_DIR}/jobs.pub"
+    local unit
+    for unit in yomins-agent-jobs.service yomins-agent-jobs.path; do
+        fetch_release_file "$unit" "${SYSTEMD_DIR}/${unit}" || die "Could not get ${unit}."
+        chmod 644 "${SYSTEMD_DIR}/${unit}"
+        command -v restorecon &>/dev/null && restorecon "${SYSTEMD_DIR}/${unit}" || true
+    done
+    systemctl daemon-reload
+    systemctl enable --now yomins-agent-jobs.path || warn "Could not start yomins-agent-jobs.path."
+}
+
+remove_maintenance() {
+    info "Removing the maintenance job runner..."
+    systemctl disable --now yomins-agent-jobs.path 2>/dev/null || true
+    rm -f "${SYSTEMD_DIR}/yomins-agent-jobs.path" "${SYSTEMD_DIR}/yomins-agent-jobs.service" \
+        "${CONFIG_DIR}/jobs.pub" /usr/local/sbin/yopatch
+    rm -rf /etc/yopatch /var/lib/yomins/jobs-seen "${STATE_DIR}/jobs"
+    systemctl daemon-reload
+}
+
 install_smart_timer() {
     install_root_timer smart "disk health (SMART)"
     if ! command -v smartctl &>/dev/null; then
@@ -482,6 +543,7 @@ do_uninstall() {
     systemctl disable "$SERVICE_NAME" 2>/dev/null || true
     systemctl disable --now yomins-agent-smart.timer 2>/dev/null || true
     systemctl disable --now yomins-agent-restart.timer 2>/dev/null || true
+    [[ -f "${CONFIG_DIR}/jobs.pub" ]] && remove_maintenance
 
     info "Removing service file..."
     rm -f "$SERVICE_FILE" "${SYSTEMD_DIR}/yomins-agent-smart.service" "${SYSTEMD_DIR}/yomins-agent-smart.timer" \
@@ -578,6 +640,10 @@ main() {
     install_binary
     install_upgrade_script
     write_config
+    case "$MAINTENANCE" in
+        on)  install_maintenance ;;
+        off) remove_maintenance ;;
+    esac
     install_service
     install_smart_timer
     install_root_timer restart "services to restart after updates"

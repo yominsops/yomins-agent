@@ -200,6 +200,17 @@ After an update replaces a library or a binary, services started before keep run
 | `system_service_restart_required{unit}` | 1 for each such service (`nginx.service`) |
 | `system_processes_restart_required_other` | Such processes outside a service: login sessions, user managers |
 
+#### Maintenance jobs
+
+On servers whose plan includes maintenance, `install.sh --maintenance` lets the maintenance automation do the work it is asked for in the portal: install updates, restart services, reboot. Nothing is pushed to the server and nothing listens on it:
+
+1. The automation signs a job (a JWT, ES256) with its own key. The installer pins the public half in `/etc/yomins-agent/jobs.pub`.
+2. The agent fetches its jobs from the ingest server (`GET /v1/push/jobs`) into `/var/lib/yomins/agent/jobs/inbox`. It never runs them itself.
+3. `yomins-agent-jobs.path` starts `yomins-agent-jobs.service` (root), which runs `yomins-agent job-run`: for each job it checks the signature against the pinned key (the agent cannot write it), that the job is for this agent, unexpired and never run before, and only then runs `/usr/local/sbin/yopatch <verb> <args>`.
+4. The result lands in `jobs/outbox`; the agent posts it back (`POST /v1/push/jobs/result`).
+
+`yopatch` does one of `plan`, `security` (unattended-upgrade), `upgrade PKG…` (only packages matching `YOPATCH_ALLOW_PACKAGES` in `/etc/yopatch/yopatch.conf`), `restart UNIT…` (only services the restart scan lists, never `YOPATCH_DENY_UNITS`), `reboot` (in a minute), and logs every call to `/var/log/yopatch.log`. `install.sh --remove-maintenance` takes it all away.
+
 #### CloudLinux
 
 Only on CloudLinux OS, from files (the agent cannot run `lvectl` or `cagefsctl`). Written against the CloudLinux documentation: `/proc/lve/list` is read by its header, so columns that differ between LVE versions are picked up by name.

@@ -135,6 +135,44 @@ install_timer() {
     return 0
 }
 
+# install_jobs VERSION — on a --maintenance server (the job key is there),
+# installs the job runner units and yopatch of VERSION, fetched as root from
+# the release, and starts the path unit. The key itself is never changed here:
+# it comes only from the installer.
+install_jobs() {
+    version="$1"
+    [ -f /etc/yomins-agent/jobs.pub ] || return 0
+    printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    tmp=$(mktemp -d) || return 0
+    if ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent-jobs.service" -o "${tmp}/service" ||
+        ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yomins-agent-jobs.path" -o "${tmp}/path" ||
+        ! curl -fsSL --max-time 20 "${RELEASES}/${version}/yopatch" -o "${tmp}/yopatch"; then
+        log "jobs: download failed, skipped"
+        rm -rf "$tmp"
+        return 0
+    fi
+    if ! grep -q '^ExecStart=/usr/local/bin/yomins-agent job-run' "${tmp}/service" || ! grep -q '^\[Path\]' "${tmp}/path" ||
+        ! head -n 1 "${tmp}/yopatch" | grep -q '^#!/bin/bash'; then
+        log "jobs: unexpected files in ${version}, skipped"
+        rm -rf "$tmp"
+        return 0
+    fi
+    cp "${tmp}/yopatch" /usr/local/sbin/yopatch.new && chmod 755 /usr/local/sbin/yopatch.new && mv /usr/local/sbin/yopatch.new /usr/local/sbin/yopatch
+    for f in service path; do
+        dst="/etc/systemd/system/yomins-agent-jobs.${f}"
+        cp "${tmp}/${f}" "${dst}.new"
+        chmod 644 "${dst}.new"
+        mv "${dst}.new" "$dst"
+        if command -v restorecon >/dev/null 2>&1; then restorecon "$dst" || true; fi
+    done
+    rm -rf "$tmp"
+    systemctl daemon-reload
+    systemctl enable --now yomins-agent-jobs.path >/dev/null 2>&1 || log "jobs: could not start"
+    log "jobs: runner of ${version} installed"
+    return 0
+}
+
 # ensure_timers — installs the root timers of the installed binary's release
 # once per version. The run that applies an upgrade is still the previous
 # helper (refresh_unit replaces this file while it runs), which may not know
@@ -151,6 +189,9 @@ ensure_timers() {
         [ -f "/etc/systemd/system/yomins-agent-${t%%:*}.timer" ] && continue
         install_timer "$v" "${t%%:*}" "${t#*:}"
     done
+    if [ -f /etc/yomins-agent/jobs.pub ] && [ ! -f /etc/systemd/system/yomins-agent-jobs.path ]; then
+        install_jobs "$v"
+    fi
     mkdir -p "$UPGRADE_DIR" 2>/dev/null || return 0
     rm -f "${UPGRADE_DIR}"/timers-v* 2>/dev/null || true
     touch "$mark" 2>/dev/null || true
@@ -222,6 +263,7 @@ if [ -f "$PENDING" ]; then
 
     install_timer "$version" smart smart-scan
     install_timer "$version" restart restart-scan
+    install_jobs "$version"
 
     log "upgrade applied, binary replaced — waiting for agent to commit"
 fi
