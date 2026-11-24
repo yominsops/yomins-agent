@@ -86,7 +86,7 @@ func init() {
 		irqbalance accounts-daemon networkd-dispatcher unattended-upgr packagekitd upowerd thermald
 		ModemManager wpa_supplicant qemu-ga chronyd lvmetad dhclient auditd tuned gssproxy rngd rpcbind
 		snapd lxcfs iscsid smartd sssd yomins-agent containerd-shim containerd-shim-runc-v2 docker-proxy runc
-		sleep bash sh dash sudo su sshd-session`) {
+		sleep bash sh dash sudo su sshd-session udevadm journalctl`) {
 		boringNames[n] = true
 	}
 }

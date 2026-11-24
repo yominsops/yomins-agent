@@ -163,8 +163,13 @@ func TestProcesses(t *testing.T) {
 	root := t.TempDir()
 	put(t, root, "/var/lib/dpkg/status", dpkgStatus, 0o644)
 	put(t, root, "/var/lib/dpkg/info/nginx-core.list", "/.\n/usr\n/usr/sbin/nginx\n", 0o644)
-	proc := func(pid, exe, cgroup string) {
+	proc := func(pid, exe, cgroup string, ppid ...string) {
+		parent := "1"
+		if len(ppid) > 0 {
+			parent = ppid[0]
+		}
 		put(t, root, "/proc/"+pid+"/cgroup", cgroup, 0o644)
+		put(t, root, "/proc/"+pid+"/stat", pid+" (a (b) c) S "+parent+" 1 1 0", 0o644)
 		if err := os.Symlink(exe, filepath.Join(root, "proc", pid, "exe")); err != nil {
 			t.Fatal(err)
 		}
@@ -175,7 +180,8 @@ func TestProcesses(t *testing.T) {
 	proc("300", "/usr/bin/php", "0::/system.slice/docker-abc.scope\n")              // a container's
 	proc("400", "/usr/bin/vim", "0::/user.slice/user-1000.slice/session-1.scope\n") // a login session
 	proc("500", "/opt/app/bin/worker", "0::/system.slice/worker.service\n")
-	put(t, root, "/proc/self/cgroup", "", 0o644) // not a pid
+	proc("600", "/usr/lib/nagios/plugins/check_ping", "0::/system.slice/worker.service\n", "500") // a child of the service
+	put(t, root, "/proc/self/cgroup", "", 0o644)                                                  // not a pid
 
 	r := Report{Packages: parseDpkgStatus([]byte(dpkgStatus))}
 	e := &Env{Root: root, Run: func(context.Context, bool, string, ...string) ([]byte, error) { return nil, errors.New("no") }}
