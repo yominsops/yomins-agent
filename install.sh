@@ -36,7 +36,10 @@ MAINTENANCE=""              # --maintenance: on, --remove-maintenance: off, else
 # The automation's job key (n8n credential "yopatch jobs signing", ES256). Pinned
 # here, in the release, so that only jobs n8n signed run on a --maintenance
 # server: the backend and the ingest server cannot make one.
-JOBS_PUBLIC_KEY=""
+JOBS_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2mwIVRnkZHMwv6eqjzjFIpA1keqT
+1OydZAVaXMk20DQlV3cESEFZfZhKSOmBwGyFy4PziQwgruvAMnX4tsxCWw==
+-----END PUBLIC KEY-----'
 
 BINARY_NAME="yomins-agent"
 SERVICE_NAME="yomins-agent"
