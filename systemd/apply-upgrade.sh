@@ -94,8 +94,8 @@ refresh_unit() {
 
 # install_timer VERSION NAME MODE — installs a root timer of VERSION
 # (yomins-agent-NAME.service and .timer, running `yomins-agent MODE`) and
-# starts it: smart (disk health, smart-scan) and restart (services running
-# replaced code, restart-scan). Run after the new binary is in place, so the
+# starts it: smart (disk health, smart-scan), restart (services running
+# replaced code, restart-scan) and inventory (the software, inventory-scan). Run after the new binary is in place, so the
 # timer never starts an older binary that lacks the mode. Like the unit,
 # fetched as root from the release. A failure only leaves that part
 # unreported; a release without the timer (older than it) is skipped.
@@ -184,7 +184,7 @@ ensure_timers() {
     printf '%s' "$v" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || return 0
     mark="${UPGRADE_DIR}/timers-${v}"
     [ -f "$mark" ] && return 0
-    for t in smart:smart-scan restart:restart-scan; do
+    for t in smart:smart-scan restart:restart-scan inventory:inventory-scan; do
         # Already there: no download at start (an upgrade refreshes them).
         [ -f "/etc/systemd/system/yomins-agent-${t%%:*}.timer" ] && continue
         install_timer "$v" "${t%%:*}" "${t#*:}"
@@ -263,6 +263,7 @@ if [ -f "$PENDING" ]; then
 
     install_timer "$version" smart smart-scan
     install_timer "$version" restart restart-scan
+    install_timer "$version" inventory inventory-scan
     install_jobs "$version"
 
     log "upgrade applied, binary replaced — waiting for agent to commit"

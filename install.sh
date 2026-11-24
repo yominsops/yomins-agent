@@ -417,8 +417,9 @@ install_service() {
     fi
 }
 
-# Root timers: reading disk health (smart-scan) and other processes' memory
-# maps (restart-scan) needs root, the agent itself does not have it.
+# Root timers: reading disk health (smart-scan), other processes' memory
+# maps (restart-scan) and the software of every site and process
+# (inventory-scan) needs root, the agent itself does not have it.
 # install_root_timer NAME WHAT installs yomins-agent-NAME.service and .timer.
 install_root_timer() {
     local name="$1" what="$2" script_dir unit
@@ -546,11 +547,13 @@ do_uninstall() {
     systemctl disable "$SERVICE_NAME" 2>/dev/null || true
     systemctl disable --now yomins-agent-smart.timer 2>/dev/null || true
     systemctl disable --now yomins-agent-restart.timer 2>/dev/null || true
+    systemctl disable --now yomins-agent-inventory.timer 2>/dev/null || true
     [[ -f "${CONFIG_DIR}/jobs.pub" ]] && remove_maintenance
 
     info "Removing service file..."
     rm -f "$SERVICE_FILE" "${SYSTEMD_DIR}/yomins-agent-smart.service" "${SYSTEMD_DIR}/yomins-agent-smart.timer" \
-        "${SYSTEMD_DIR}/yomins-agent-restart.service" "${SYSTEMD_DIR}/yomins-agent-restart.timer"
+        "${SYSTEMD_DIR}/yomins-agent-restart.service" "${SYSTEMD_DIR}/yomins-agent-restart.timer" \
+        "${SYSTEMD_DIR}/yomins-agent-inventory.service" "${SYSTEMD_DIR}/yomins-agent-inventory.timer"
     systemctl daemon-reload
 
     info "Removing files..."
@@ -650,6 +653,7 @@ main() {
     install_service
     install_smart_timer
     install_root_timer restart "services to restart after updates"
+    install_root_timer inventory "the software inventory"
     verify_running
 
     printf "\n"

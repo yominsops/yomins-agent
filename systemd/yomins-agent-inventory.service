@@ -1,0 +1,35 @@
+[Unit]
+Description=Yomins agent: software inventory
+Documentation=https://github.com/yominsops/yomins-agent#software-inventory
+# Only next to an installed agent, whose state directory gets the report.
+ConditionPathIsDirectory=/var/lib/yomins/agent
+
+[Service]
+Type=oneshot
+# Reading the sites' directories of every user, other processes' executables
+# and the Docker socket needs root, which the agent does not have. This unit
+# only reads, and writes /var/lib/yomins/agent/inventory.json, which the
+# unprivileged agent sends. No config, token or network. Programs asked for
+# their version run as nobody.
+ExecStart=/usr/local/bin/yomins-agent inventory-scan --out /var/lib/yomins/agent/inventory.json
+TimeoutStartSec=15min
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=true
+PrivateNetwork=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/yomins/agent
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+# AF_UNIX: the Docker API socket.
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+# SYS_PTRACE: other processes' executables and containers' files.
+# DAC_READ_SEARCH: read any site directory. DAC_OVERRIDE: the Docker socket and
+# the agent's 0700 state directory. SETUID/SETGID: run version probes as nobody.
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID

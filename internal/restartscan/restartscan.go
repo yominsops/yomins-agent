@@ -187,3 +187,8 @@ func Read(path string) (Report, error) {
 	}
 	return r, nil
 }
+
+// ServiceUnit is serviceUnit for other scans (the inventory): the systemd
+// service of a process from its /proc/<pid>/cgroup, "" outside a service and
+// "-" for a container's process.
+func ServiceUnit(cgroup string) string { return serviceUnit(cgroup) }

@@ -22,6 +22,7 @@ import (
 	"github.com/yominsops/yomins-agent/internal/config"
 	"github.com/yominsops/yomins-agent/internal/identity"
 	"github.com/yominsops/yomins-agent/internal/integrations"
+	"github.com/yominsops/yomins-agent/internal/inventory"
 	"github.com/yominsops/yomins-agent/internal/jobs"
 	"github.com/yominsops/yomins-agent/internal/remote"
 	"github.com/yominsops/yomins-agent/internal/transport"
@@ -46,6 +47,10 @@ func run() error {
 	// The root restart timer: services still running replaced code.
 	if len(os.Args) > 1 && os.Args[1] == "restart-scan" {
 		return runRestartScan(os.Args[2:])
+	}
+	// The root inventory timer: the software on the server.
+	if len(os.Args) > 1 && os.Args[1] == "inventory-scan" {
+		return runInventoryScan(os.Args[2:])
 	}
 	// The root job runner: signed maintenance jobs (yopatch).
 	if len(os.Args) > 1 && os.Args[1] == "job-run" {
@@ -201,6 +206,10 @@ func run() error {
 		go (&jobs.Poller{Server: cfg.Server, Token: cfg.Token, Hostname: hostname, AgentID: id.AgentID, Paths: jobPaths, Session: session}).Run(ctx)
 	}
 
+	// The software inventory the root timer writes (yomins-agent-inventory.timer).
+	go (&inventory.Sender{Server: cfg.Server, Token: cfg.Token, Hostname: hostname, AgentID: id.AgentID,
+		Path: filepath.Join(cfg.StateDir, "inventory.json"), StateDir: cfg.StateDir, Session: session}).Run(ctx)
+
 	err = ag.Run(ctx)
 	if v, ok := restartVersion.Load().(string); ok {
 		slog.Info("restarting to apply the new configuration", "version", v)
@@ -341,6 +350,7 @@ func runUninstall() error {
 	run("Disabling service", func() error { return runCmd("systemctl", "disable", serviceName) })
 	run("Disabling SMART timer", func() error { return runCmd("systemctl", "disable", "--now", "yomins-agent-smart.timer") })
 	run("Disabling restart timer", func() error { return runCmd("systemctl", "disable", "--now", "yomins-agent-restart.timer") })
+	run("Disabling inventory timer", func() error { return runCmd("systemctl", "disable", "--now", "yomins-agent-inventory.timer") })
 	run("Disabling job runner", func() error { return runCmd("systemctl", "disable", "--now", "yomins-agent-jobs.path") })
 	run("Removing service file", func() error { return os.Remove(serviceFile) })
 	run("Removing SMART units", func() error {
@@ -350,6 +360,10 @@ func runUninstall() error {
 	run("Removing restart units", func() error {
 		_ = os.Remove("/etc/systemd/system/yomins-agent-restart.service")
 		return os.Remove("/etc/systemd/system/yomins-agent-restart.timer")
+	})
+	run("Removing inventory units", func() error {
+		_ = os.Remove("/etc/systemd/system/yomins-agent-inventory.service")
+		return os.Remove("/etc/systemd/system/yomins-agent-inventory.timer")
 	})
 	run("Removing job runner", func() error {
 		_ = os.Remove("/etc/systemd/system/yomins-agent-jobs.service")

@@ -1,0 +1,10 @@
+[Unit]
+Description=Yomins agent: daily software inventory
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

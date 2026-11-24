@@ -200,6 +200,21 @@ After an update replaces a library or a binary, services started before keep run
 | `system_service_restart_required{unit}` | 1 for each such service (`nginx.service`) |
 | `system_processes_restart_required_other` | Such processes outside a service: login sessions, user managers |
 
+#### Software inventory
+
+What runs on the server, for the server page and for matching against vulnerabilities. `install.sh` and the self-upgrade install a root timer, `yomins-agent-inventory.timer`: once a day it runs `yomins-agent inventory-scan`, which only reads and writes `/var/lib/yomins/agent/inventory.json`; the agent sends that report to `POST /v1/push/inventory` (gzip JSON) when it changes and at least daily. No network in the scan itself, no config, no token. Root is needed to read every user's site directory, other processes' executables and the Docker socket; programs asked for their version run as `nobody`, and only root-owned ones that only root can change. `yomins-agent inventory-scan --out -` prints the report.
+
+| Part | What it reports |
+|---|---|
+| OS | `/etc/os-release`: id, version, codename |
+| Packages | Every installed package with its version and source package: dpkg (read from `/var/lib/dpkg/status`) or rpm |
+| Services | Programs running in a systemd service (and known ones outside one): name, version, the package they come from, unit. Version from the package, or from the program (`nginx -v`) when it was installed by hand |
+| Containers | Running containers (Docker or Podman API, read only): image, the distribution inside, and the versions official images set in their environment (`PHP_VERSION`, `NGINX_VERSION`, …) |
+| Programs outside packages | ELF executables in `/usr/local/{bin,sbin}` and `/opt/*/bin` that no package owns |
+| Web applications | The core version of CMS and frameworks in the sites' directories (web server document roots, the usual hosting panel places, directories mounted into containers): WordPress, Joomla, Drupal, Magento, Bitrix, OpenCart, PrestaShop, Nextcloud, phpMyAdmin, Roundcube, MediaWiki, Moodle, TYPO3, DLE; Laravel, Symfony, Yii, CodeIgniter, CakePHP, Laminas, Slim from `composer.lock`. No plugins or extensions |
+
+Each part is a detector (`internal/inventory`); one that fails is named in the report's `errors` and the others still report.
+
 #### Maintenance jobs
 
 On servers whose plan includes maintenance, `install.sh --maintenance` lets the maintenance automation do the work it is asked for in the portal: install updates, restart services, reboot. Nothing is pushed to the server and nothing listens on it:
@@ -686,7 +701,8 @@ internal/
   agent/                — orchestration loop (collect → encode → push)
   upgrade/              — self-upgrade: version check, download, staging, rollback
   smart/                — `smart-scan`: smartctl → smart.json (run by the root timer)
-systemd/                — service unit, apply-upgrade.sh helper, SMART service and timer
+  inventory/            — `inventory-scan`: software detectors → inventory.json (root timer); Sender pushes it
+systemd/                — service unit, apply-upgrade.sh helper, root timers (SMART, restart, inventory), job runner
 Dockerfile
 Makefile
 ```
