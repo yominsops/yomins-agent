@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/yominsops/yomins-agent/internal/collector"
+	"github.com/yominsops/yomins-agent/internal/config"
 )
 
 type mockBackupReader struct {
@@ -15,19 +17,19 @@ type mockBackupReader struct {
 	err  error
 }
 
-func (m *mockBackupReader) ReadReport() ([]byte, error) {
+func (m *mockBackupReader) ReadReport(string) ([]byte, error) {
 	return m.data, m.err
 }
 
 func TestBackupCollector_Name(t *testing.T) {
-	c := collector.NewBackupCollectorWithReader(&mockBackupReader{err: os.ErrNotExist})
+	c := collector.NewBackupCollectorWithReader(&mockBackupReader{err: os.ErrNotExist}, nil)
 	if c.Name() != "backup" {
 		t.Errorf("Name() = %q, want backup", c.Name())
 	}
 }
 
 func TestBackupCollector_FileNotExist(t *testing.T) {
-	c := collector.NewBackupCollectorWithReader(&mockBackupReader{err: os.ErrNotExist})
+	c := collector.NewBackupCollectorWithReader(&mockBackupReader{err: os.ErrNotExist}, nil)
 	pts, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("expected no error for missing file, got: %v", err)
@@ -38,7 +40,7 @@ func TestBackupCollector_FileNotExist(t *testing.T) {
 }
 
 func TestBackupCollector_MalformedJSON(t *testing.T) {
-	c := collector.NewBackupCollectorWithReader(&mockBackupReader{data: []byte("not json")})
+	c := collector.NewBackupCollectorWithReader(&mockBackupReader{data: []byte("not json")}, nil)
 	_, err := c.Collect(context.Background())
 	if err == nil {
 		t.Error("expected error for malformed JSON, got nil")
@@ -46,7 +48,7 @@ func TestBackupCollector_MalformedJSON(t *testing.T) {
 }
 
 func TestBackupCollector_ReadError(t *testing.T) {
-	c := collector.NewBackupCollectorWithReader(&mockBackupReader{err: fmt.Errorf("disk error")})
+	c := collector.NewBackupCollectorWithReader(&mockBackupReader{err: fmt.Errorf("disk error")}, nil)
 	_, err := c.Collect(context.Background())
 	if err == nil {
 		t.Error("expected error, got nil")
@@ -67,7 +69,7 @@ func TestBackupCollector_SuccessReport(t *testing.T) {
 		}
 	}`, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano))
 
-	c := collector.NewBackupCollectorWithReader(&mockBackupReader{data: []byte(json)})
+	c := collector.NewBackupCollectorWithReader(&mockBackupReader{data: []byte(json)}, nil)
 	pts, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -113,7 +115,7 @@ func TestBackupCollector_ErrorReport(t *testing.T) {
 		"log_tail": "something went wrong"
 	}`, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano))
 
-	c := collector.NewBackupCollectorWithReader(&mockBackupReader{data: []byte(json)})
+	c := collector.NewBackupCollectorWithReader(&mockBackupReader{data: []byte(json)}, nil)
 	pts, err := c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -137,5 +139,53 @@ func TestBackupCollector_ErrorReport(t *testing.T) {
 	}
 	if _, ok := byName["yomins_backup_last_success_timestamp"]; ok {
 		t.Error("last_success_timestamp should not be present on error report")
+	}
+}
+
+type mapBackupReader map[string]string
+
+func (m mapBackupReader) ReadReport(path string) ([]byte, error) {
+	if path == "/broken.json" {
+		return nil, fmt.Errorf("permission denied")
+	}
+	v, ok := m[path]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return []byte(v), nil
+}
+
+// Several reports: each is labeled with its name, carries its limit when set; a missing
+// one is skipped, an unreadable one is an error that does not hide the others.
+func TestBackupCollector_SeveralReports(t *testing.T) {
+	ok := `{"status":"success","start_time":"2026-11-25T04:15:01+02:00","end_time":"2026-11-25T04:21:27+02:00"}`
+	r := mapBackupReader{"/home.json": ok, "/sync.json": `{"status":"error","start_time":"2026-11-22T03:00:01Z","end_time":"2026-11-22T03:00:02Z"}`}
+	c := collector.NewBackupCollectorWithReader(r, []config.WatchedFile{
+		{Name: "backup", Path: "/home.json"},
+		{Name: "s3-to-ftp", Path: "/sync.json", MaxAge: 504 * time.Hour},
+		{Name: "absent", Path: "/absent.json"},
+		{Name: "broken", Path: "/broken.json"},
+	})
+	pts, err := c.Collect(context.Background())
+	if err == nil {
+		t.Fatal("the unreadable report must be reported")
+	}
+	got := map[string]float64{}
+	for _, p := range pts {
+		got[p.Labels["backup"]+"/"+p.Name] = p.Value
+	}
+	if got["backup/yomins_backup_last_status"] != 1 || got["s3-to-ftp/yomins_backup_last_status"] != 0 {
+		t.Errorf("statuses: %v", got)
+	}
+	if got["s3-to-ftp/yomins_backup_max_age_seconds"] != (504 * time.Hour).Seconds() {
+		t.Errorf("limit: %v", got)
+	}
+	if _, set := got["backup/yomins_backup_max_age_seconds"]; set {
+		t.Error("no limit, no metric")
+	}
+	for k := range got {
+		if strings.HasPrefix(k, "absent/") || strings.HasPrefix(k, "broken/") {
+			t.Errorf("unexpected %s", k)
+		}
 	}
 }

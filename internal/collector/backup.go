@@ -8,10 +8,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/yominsops/yomins-agent/internal/config"
 	"github.com/yominsops/yomins-agent/internal/metrics"
 )
-
-const backupReportFile = "/var/lib/yomins/backup/last_run.json"
 
 type backupReport struct {
 	Status    string      `json:"status"`
@@ -25,32 +24,53 @@ type backupStat struct {
 	TotalBytesProcessed float64 `json:"total_bytes_processed"`
 }
 
-// BackupReader abstracts reading the yomins-backup report file.
+// BackupReader abstracts reading a backup report file.
 type BackupReader interface {
-	ReadReport() ([]byte, error)
+	ReadReport(path string) ([]byte, error)
 }
 
-// BackupCollector collects metrics from the yomins-backup last_run.json report.
-// If the report file does not exist, no metrics are emitted — this is expected
-// on hosts where yomins-backup is not installed.
+// BackupCollector collects metrics from backup reports in the last_run.json format
+// yomins-backup writes (any job writing the same format can be watched): by default the
+// one at config.DefaultBackupReport, or the ones in the remote configuration. Every
+// metric carries a backup label with the report's name. A report that does not exist
+// emits nothing — expected where the job is not installed.
 type BackupCollector struct {
-	reader BackupReader
+	reader  BackupReader
+	reports []config.WatchedFile
 }
 
-// NewBackupCollector returns a BackupCollector backed by the real filesystem.
-func NewBackupCollector() *BackupCollector {
-	return &BackupCollector{reader: realBackupReader{}}
+// NewBackupCollector returns a BackupCollector for the given reports (nil: the default)
+// backed by the real filesystem.
+func NewBackupCollector(reports []config.WatchedFile) *BackupCollector {
+	return NewBackupCollectorWithReader(realBackupReader{}, reports)
 }
 
 // NewBackupCollectorWithReader returns a BackupCollector with an injected reader.
-func NewBackupCollectorWithReader(r BackupReader) *BackupCollector {
-	return &BackupCollector{reader: r}
+func NewBackupCollectorWithReader(r BackupReader, reports []config.WatchedFile) *BackupCollector {
+	if reports == nil {
+		reports = config.DefaultBackups()
+	}
+	return &BackupCollector{reader: r, reports: reports}
 }
 
 func (c *BackupCollector) Name() string { return "backup" }
 
 func (c *BackupCollector) Collect(_ context.Context) ([]metrics.MetricPoint, error) {
-	data, err := c.reader.ReadReport()
+	var pts []metrics.MetricPoint
+	var errs []error
+	for _, r := range c.reports {
+		got, err := c.collectReport(r)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("backup %s: %w", r.Name, err))
+			continue
+		}
+		pts = append(pts, got...)
+	}
+	return pts, errors.Join(errs...)
+}
+
+func (c *BackupCollector) collectReport(r config.WatchedFile) ([]metrics.MetricPoint, error) {
+	data, err := c.reader.ReadReport(r.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -63,59 +83,36 @@ func (c *BackupCollector) Collect(_ context.Context) ([]metrics.MetricPoint, err
 		return nil, fmt.Errorf("parse backup report: %w", err)
 	}
 
-	duration := report.EndTime.Sub(report.StartTime).Seconds()
+	labels := map[string]string{"backup": r.Name}
+	point := func(name, help string, v float64) metrics.MetricPoint {
+		return metrics.MetricPoint{Name: name, Help: help, Type: metrics.Gauge, Value: v, Labels: labels}
+	}
 
 	var status float64
 	if report.Status == "success" {
 		status = 1
 	}
-
 	pts := []metrics.MetricPoint{
-		{
-			Name:  "yomins_backup_last_status",
-			Help:  "Status of the last backup run (1=success, 0=error)",
-			Type:  metrics.Gauge,
-			Value: status,
-		},
-		{
-			Name:  "yomins_backup_last_duration_seconds",
-			Help:  "Duration of the last backup run in seconds",
-			Type:  metrics.Gauge,
-			Value: duration,
-		},
+		point("yomins_backup_last_status", "Status of the last backup run (1=success, 0=error)", status),
+		point("yomins_backup_last_duration_seconds", "Duration of the last backup run in seconds", report.EndTime.Sub(report.StartTime).Seconds()),
 	}
-
+	if r.MaxAge > 0 {
+		pts = append(pts, point("yomins_backup_max_age_seconds", "How old the last successful backup may be (agent configuration)", r.MaxAge.Seconds()))
+	}
 	if report.Status == "success" {
-		pts = append(pts, metrics.MetricPoint{
-			Name:  "yomins_backup_last_success_timestamp",
-			Help:  "Unix timestamp of the last successful backup",
-			Type:  metrics.Gauge,
-			Value: float64(report.EndTime.Unix()),
-		})
-
+		pts = append(pts, point("yomins_backup_last_success_timestamp", "Unix timestamp of the last successful backup", float64(report.EndTime.Unix())))
 		if report.Stat != nil {
 			pts = append(pts,
-				metrics.MetricPoint{
-					Name:  "yomins_backup_files_total",
-					Help:  "Total number of files processed in the last backup",
-					Type:  metrics.Gauge,
-					Value: report.Stat.TotalFilesProcessed,
-				},
-				metrics.MetricPoint{
-					Name:  "yomins_backup_bytes_total",
-					Help:  "Total number of bytes processed in the last backup",
-					Type:  metrics.Gauge,
-					Value: report.Stat.TotalBytesProcessed,
-				},
+				point("yomins_backup_files_total", "Total number of files processed in the last backup", report.Stat.TotalFilesProcessed),
+				point("yomins_backup_bytes_total", "Total number of bytes processed in the last backup", report.Stat.TotalBytesProcessed),
 			)
 		}
 	}
-
 	return pts, nil
 }
 
 type realBackupReader struct{}
 
-func (realBackupReader) ReadReport() ([]byte, error) {
-	return os.ReadFile(backupReportFile)
+func (realBackupReader) ReadReport(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }

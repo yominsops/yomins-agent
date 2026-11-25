@@ -243,7 +243,7 @@ func allCollectors(cfg *config.Config) []collector.Collector {
 		collector.NewCPUCollector(),
 		collector.NewMemoryCollector(),
 		collector.NewSystemCollector(),
-		collector.NewBackupCollector(),
+		collector.NewBackupCollector(cfg.Backups),
 		collector.NewInfoCollector(collector.InfoConfig{
 			DisableKernelCareInfo:  cfg.DisableKernelCareInfo,
 			VirtualizationOverride: cfg.VirtualizationOverride,
@@ -281,6 +281,9 @@ func allCollectors(cfg *config.Config) []collector.Collector {
 	}
 	if len(cfg.ScrapeURLs) > 0 {
 		collectors = append(collectors, integrations.NewScrape(cfg.ScrapeURLs))
+	}
+	if len(cfg.FileFreshness) > 0 {
+		collectors = append(collectors, collector.NewFileFreshnessCollector(cfg.FileFreshness))
 	}
 	if !cfg.DisableFilesystems {
 		if len(cfg.ExcludeMountpoints) > 0 {

@@ -277,7 +277,7 @@ Each integration finds its service and reports `agent_integration_status{integra
 
 ### Backup
 
-Metrics from the [yomins-backup](yomins-backup) report file (`/var/lib/yomins/backup/last_run.json`). If the file does not exist the collector emits nothing — this is expected on hosts where `yomins-backup` is not installed.
+Metrics from backup reports in the [yomins-backup](yomins-backup) `last_run.json` format (`status`, `start_time`, `end_time`, `stat`); any job writing the same format can be watched. By default the agent reads `/var/lib/yomins/backup/last_run.json` as backup `backup`; the remote configuration (`backups[]`: `name`, `path`, optional `max_age`) replaces it by name or adds others. A report that does not exist emits nothing — expected on hosts without the job. Every metric carries `backup="<name>"`.
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -286,6 +286,17 @@ Metrics from the [yomins-backup](yomins-backup) report file (`/var/lib/yomins/ba
 | `yomins_backup_last_success_timestamp` | Gauge | Unix timestamp of the last successful backup; omitted if the last run failed |
 | `yomins_backup_files_total` | Gauge | Total files processed in the last backup; omitted if the last run failed |
 | `yomins_backup_bytes_total` | Gauge | Total bytes processed in the last backup; omitted if the last run failed |
+| `yomins_backup_max_age_seconds` | Gauge | The report's `max_age` from the configuration, when set (the server's `backup_stale` rule uses it) |
+
+### File freshness
+
+For each directory in the remote configuration (`file_freshness[]`: `name`, `path`, optional `max_age`), the regular files directly in it (not recursive) and when the newest was modified: a dump or export job that stopped writing shows up. A missing directory counts as empty. Labels `check="<name>"`, `path`.
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `file_freshness_newest_timestamp_seconds` | Gauge | Modification time of the newest file; 0 when there is none |
+| `file_freshness_files` | Gauge | Regular files in the directory |
+| `file_freshness_max_age_seconds` | Gauge | The directory's `max_age` from the configuration, when set (the server's `file_stale` rule uses it) |
 
 ### Agent self-metrics
 | Metric | Type | Description |
@@ -498,9 +509,9 @@ Parsers set the line's own time, a level (`error`, `warn`, `info`, `debug`) and 
 
 Admins set the agent's configuration in the portal: a profile (e.g. "LAMP server") assigned to the project, with project- and server-level overrides. The agent fetches it every minute (`GET <server>/config`), saves it in `<state-dir>/remote_config.json`, and restarts to apply a new version (at most once per 2 minutes of uptime). At startup the saved configuration is applied over the environment, so it does not depend on the network.
 
-It can set the push interval, disable collectors, switch logs and integrations on or off, add log paths, excludes and redaction patterns, the nginx status URL and scrape URLs, and switch the event collectors. Local lists are extended, not replaced.
+It can set the push interval, disable collectors, switch logs and integrations on or off, add log paths, excludes and redaction patterns, the nginx status URL and scrape URLs, the backup reports and watched directories, and switch the event collectors. Local lists are extended, not replaced.
 
-`YOMINS_REMOTE_CONFIG` decides how far it is trusted: `full` (default), `limited` (nothing that chooses what is read — log paths, scrape and status URLs) or `off`. The log allow list (`YOMINS_LOG_ALLOW`) applies whatever the server says. `agent_config_info{version,config_source,mode}` reports what is applied.
+`YOMINS_REMOTE_CONFIG` decides how far it is trusted: `full` (default), `limited` (nothing that chooses what is read — log paths, scrape and status URLs, backup reports, watched directories) or `off`. The log allow list (`YOMINS_LOG_ALLOW`) applies whatever the server says. `agent_config_info{version,config_source,mode}` reports what is applied.
 
 ## Dry-run mode
 
