@@ -10,8 +10,8 @@
 #                        (its own origins and holds), report what changed
 #   upgrade PKG...       upgrade these packages only; each must match
 #                        YOPATCH_ALLOW_PACKAGES (e.g. php8.3-*) and be upgradable
-#   fix PKG...           upgrade the installed packages built from these
-#                        source packages (or named so), for a vulnerability
+#   fix PKG...           upgrade the installed packages built from the source
+#                        packages of these (source or binary) packages, for a vulnerability
 #                        fix; held packages are left, an upgrade that would
 #                        remove a package is refused. Reports what changed,
 #                        the services now running replaced code and the reboot
@@ -169,9 +169,15 @@ fix)
     [ ${#args[@]} -le 32 ] || fail "too many packages"
     mapfile -t up < <(upgradable | cut -d' ' -f1 | sed 's/:.*//')
     held=$(apt-mark showhold 2>/dev/null | sed 's/:.*//' | sort)
-    # every installed binary package of the named source (or binary) packages
+    # every installed binary package of the named packages' source packages (a
+    # name may be a source or a binary package: libglib2.0-0 is glib2.0, so are
+    # libglib2.0-bin and the rest, which apt must upgrade together)
     mapfile -t mine < <(dpkg-query -W -f '${Package} ${source:Package} ${db:Status-Status}\n' 2>/dev/null |
-        awk -v want=" ${args[*]} " '$3 == "installed" && (index(want, " " $1 " ") || index(want, " " $2 " ")) { print $1 }' | sort -u)
+        awk -v want=" ${args[*]} " '
+            $3 != "installed" { next }
+            { pkg[NR] = $1; src[NR] = $2 }
+            index(want, " " $1 " ") || index(want, " " $2 " ") { srcs[$2] = 1 }
+            END { for (i in pkg) if (src[i] in srcs) print pkg[i] }' | sort -u)
     [ ${#mine[@]} -gt 0 ] || fail "none of these packages is installed"
     targets=() kept=()
     for p in "${mine[@]}"; do

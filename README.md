@@ -227,7 +227,7 @@ On servers whose plan includes maintenance, `install.sh --maintenance` lets the 
 3. `yomins-agent-jobs.path` starts `yomins-agent-jobs.service` (root), which runs `yomins-agent job-run`: for each job it checks the signature against the pinned key (the agent cannot write it), that the job is for this agent, unexpired and never run before, and only then runs `/usr/local/sbin/yopatch <verb> <args>`.
 4. The result lands in `jobs/outbox`; the agent posts it back (`POST /v1/push/jobs/result`).
 
-`yopatch` does one of `plan`, `security` (unattended-upgrade), `upgrade PKG…` (only packages matching `YOPATCH_ALLOW_PACKAGES` in `/etc/yopatch/yopatch.conf`), `fix PKG…` (for a vulnerability: upgrades the installed packages built from these source packages, never held ones, refused if apt would remove a package; reports the services left running old code and whether a reboot is due), `restart UNIT…` (only services the restart scan lists, never `YOPATCH_DENY_UNITS`), `reboot` (in a minute), and logs every call to `/var/log/yopatch.log`. `install.sh --remove-maintenance` takes it all away.
+`yopatch` does one of `plan`, `security` (unattended-upgrade), `upgrade PKG…` (only packages matching `YOPATCH_ALLOW_PACKAGES` in `/etc/yopatch/yopatch.conf`), `fix PKG…` (for a vulnerability: upgrades every installed package built from the same source packages as these (source or binary names), never held ones, refused if apt would remove a package; reports the services left running old code and whether a reboot is due), `restart UNIT…` (only services the restart scan lists, never `YOPATCH_DENY_UNITS`), `reboot` (in a minute), and logs every call to `/var/log/yopatch.log`. `install.sh --remove-maintenance` takes it all away.
 
 #### CloudLinux
 
