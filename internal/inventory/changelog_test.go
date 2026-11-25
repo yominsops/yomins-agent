@@ -25,8 +25,12 @@ func TestPackageChangelogs(t *testing.T) {
 	write("/var/lib/dpkg/status", []byte("Package: php7.4-fpm\nStatus: install ok installed\nVersion: 1:7.4.33-31\n"))
 	var gz bytes.Buffer
 	zw := gzip.NewWriter(&gz)
-	zw.Write([]byte("php7.4 (1:7.4.33-31) bookworm; urgency=medium\n\n  * Backported from 8.2.35 [CVE-2026-109618, CVE-2026-109619]\n  * CVE-2026-109618 again\n\nphp7.4 (1:7.4.33-1)\n  * CVE-2024-4577\n"))
-	zw.Close()
+	if _, err := zw.Write([]byte("php7.4 (1:7.4.33-31) bookworm; urgency=medium\n\n  * Backported from 8.2.35 [CVE-2026-109618, CVE-2026-109619]\n  * CVE-2026-109618 again\n\nphp7.4 (1:7.4.33-1)\n  * CVE-2024-4577\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	write("/usr/share/doc/php7.4-common/changelog.Debian.gz", gz.Bytes())
 	// Debian links a binary package's doc directory to its sibling's.
 	if err := os.Symlink("php7.4-common", filepath.Join(root, "/usr/share/doc/php7.4-fpm")); err != nil {
