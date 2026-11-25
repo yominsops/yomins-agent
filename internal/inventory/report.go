@@ -138,6 +138,9 @@ type Component struct {
 	// Domains are the site's names from the web server's configuration,
 	// the hosting panel's directory or the CMS settings (webapp, framework).
 	Domains []string `json:"domains,omitempty"`
+	// FixedCVEs are the CVE ids the changelog of its Debian package names:
+	// a build that backports fixes keeps the upstream version (sury's PHP).
+	FixedCVEs []string `json:"fixed_cves,omitempty"`
 }
 
 var safeValue = regexp.MustCompile(`[^0-9A-Za-z.+:~_@/ ()-]`)

@@ -214,6 +214,7 @@ What runs on the server, for the server page and for matching against vulnerabil
 | Programs outside packages | ELF executables in `/usr/local/{bin,sbin}` and `/opt/*/bin` that no package owns |
 | Web applications | The core version of CMS and frameworks in the sites' directories (web server document roots, the usual hosting panel places, directories mounted into containers): WordPress, Joomla, Drupal, Magento, Bitrix, OpenCart, PrestaShop, Nextcloud, phpMyAdmin, Roundcube, MediaWiki, Moodle, TYPO3, DLE; Laravel, Symfony, Yii, CodeIgniter, CakePHP, Laminas, Slim from `composer.lock`. No plugins or extensions. Each with the site's domains: `server_name` / `ServerName` / `ServerAlias` of the virtual host whose root is the directory (or its `public/`) — also of a web server running in a container, its roots mapped to the host through the mounts; `set $var …` in the server block is followed (`root $base;`), and an app in a directory of a root (`example.com/blog`) takes the root's names — the hosting panel's directory name (Plesk, Hestia, DirectAdmin, ISPmanager), WordPress `WP_HOME` / `WP_SITEURL` |
 | Updates | Packages with a newer version in the repositories, from the package manager's cached data (`apt-get -s dist-upgrade`, `dnf`/`yum check-update`): new version, origin, and whether it is a security update |
+| Changelog CVEs | For each service and program from a Debian package on the host: the CVE ids its `changelog.Debian.gz` names (`fixed_cves`). Builds that backport fixes keep the upstream version (sury's PHP 7.4 and 5.6), so the backend uses this list instead of the version for those CVEs |
 
 Each part is a detector (`internal/inventory`); one that fails is named in the report's `errors` and the others still report.
 
@@ -226,7 +227,7 @@ On servers whose plan includes maintenance, `install.sh --maintenance` lets the 
 3. `yomins-agent-jobs.path` starts `yomins-agent-jobs.service` (root), which runs `yomins-agent job-run`: for each job it checks the signature against the pinned key (the agent cannot write it), that the job is for this agent, unexpired and never run before, and only then runs `/usr/local/sbin/yopatch <verb> <args>`.
 4. The result lands in `jobs/outbox`; the agent posts it back (`POST /v1/push/jobs/result`).
 
-`yopatch` does one of `plan`, `security` (unattended-upgrade), `upgrade PKG…` (only packages matching `YOPATCH_ALLOW_PACKAGES` in `/etc/yopatch/yopatch.conf`), `restart UNIT…` (only services the restart scan lists, never `YOPATCH_DENY_UNITS`), `reboot` (in a minute), and logs every call to `/var/log/yopatch.log`. `install.sh --remove-maintenance` takes it all away.
+`yopatch` does one of `plan`, `security` (unattended-upgrade), `upgrade PKG…` (only packages matching `YOPATCH_ALLOW_PACKAGES` in `/etc/yopatch/yopatch.conf`), `fix PKG…` (for a vulnerability: upgrades the installed packages built from these source packages, never held ones, refused if apt would remove a package; reports the services left running old code and whether a reboot is due), `restart UNIT…` (only services the restart scan lists, never `YOPATCH_DENY_UNITS`), `reboot` (in a minute), and logs every call to `/var/log/yopatch.log`. `install.sh --remove-maintenance` takes it all away.
 
 #### CloudLinux
 

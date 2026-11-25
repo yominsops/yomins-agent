@@ -28,7 +28,7 @@ import (
 )
 
 // Verbs yopatch knows.
-var Verbs = map[string]bool{"plan": true, "security": true, "upgrade": true, "restart": true, "reboot": true}
+var Verbs = map[string]bool{"plan": true, "security": true, "upgrade": true, "fix": true, "restart": true, "reboot": true}
 
 // Claims of a job token.
 type Claims struct {

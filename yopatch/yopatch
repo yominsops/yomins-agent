@@ -10,6 +10,11 @@
 #                        (its own origins and holds), report what changed
 #   upgrade PKG...       upgrade these packages only; each must match
 #                        YOPATCH_ALLOW_PACKAGES (e.g. php8.3-*) and be upgradable
+#   fix PKG...           upgrade the installed packages built from these
+#                        source packages (or named so), for a vulnerability
+#                        fix; held packages are left, an upgrade that would
+#                        remove a package is refused. Reports what changed,
+#                        the services now running replaced code and the reboot
 #   restart UNIT...      restart these services only; each must be listed by
 #                        the agent's restart scan and not in YOPATCH_DENY_UNITS
 #   reboot               reboot in one minute
@@ -158,6 +163,41 @@ upgrade)
     log "upgrade: exit $rc, changed: ${changed[*]:-}"
     printf '{"ok":%s,"verb":"upgrade","exit":%d,"changed":%s}\n' \
         "$([ $rc -eq 0 ] && echo true || echo false)" "$rc" "$(json_list "${changed[@]}")"
+    ;;
+fix)
+    [ ${#args[@]} -gt 0 ] || fail "fix needs package names"
+    [ ${#args[@]} -le 32 ] || fail "too many packages"
+    mapfile -t up < <(upgradable | cut -d' ' -f1 | sed 's/:.*//')
+    held=$(apt-mark showhold 2>/dev/null | sed 's/:.*//' | sort)
+    # every installed binary package of the named source (or binary) packages
+    mapfile -t mine < <(dpkg-query -W -f '${Package} ${source:Package} ${db:Status-Status}\n' 2>/dev/null |
+        awk -v want=" ${args[*]} " '$3 == "installed" && (index(want, " " $1 " ") || index(want, " " $2 " ")) { print $1 }' | sort -u)
+    [ ${#mine[@]} -gt 0 ] || fail "none of these packages is installed"
+    targets=() kept=()
+    for p in "${mine[@]}"; do
+        printf '%s\n' "${up[@]}" | grep -qxF "$p" || continue
+        if grep -qxF "$p" <<<"$held"; then kept+=("$p"); else targets+=("$p"); fi
+    done
+    changed=() rc=0
+    if [ ${#targets[@]} -gt 0 ]; then
+        removed=$(apt-get -s -o Debug::NoLocking=1 install --only-upgrade "${targets[@]}" 2>/dev/null | awk '/^Remv /{print $2}' | tr '\n' ' ')
+        [ -z "$removed" ] || fail "the upgrade would remove packages: ${removed% }"
+        before=$(mktemp)
+        installed_versions >"$before"
+        log "fix: ${args[*]} -> ${targets[*]}"
+        apt-get install -y -q --only-upgrade -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef "${targets[@]}" >>"$LOG" 2>&1 || rc=$?
+        mapfile -t changed < <(changed_since "$before")
+        rm -f "$before"
+        rescan
+    fi
+    restart=()
+    while read -r u; do
+        [ -n "$u" ] && ! denied_unit "$u" && restart+=("$u")
+    done < <(restart_units)
+    log "fix: exit $rc, changed: ${changed[*]:-}, held: ${kept[*]:-}, to restart: ${restart[*]:-}"
+    printf '{"ok":%s,"verb":"fix","exit":%d,"packages":%s,"changed":%s,"held":%s,"restart":%s,"reboot_required":%s}\n' \
+        "$([ $rc -eq 0 ] && echo true || echo false)" "$rc" "$(json_list "${mine[@]}")" "$(json_list "${changed[@]}")" \
+        "$(json_list "${kept[@]}")" "$(json_list "${restart[@]}")" "$(reboot_required)"
     ;;
 restart)
     [ ${#args[@]} -gt 0 ] || fail "restart needs unit names"

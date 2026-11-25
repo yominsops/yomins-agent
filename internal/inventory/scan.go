@@ -104,6 +104,7 @@ func Detectors() []Detector {
 		localBinaries{},
 		webApps{},
 		pendingUpdates{},
+		packageChangelogs{}, // last: it reads the packages of the components found
 	}
 }
 
