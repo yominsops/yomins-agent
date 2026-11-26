@@ -9,8 +9,9 @@ import (
 	"sort"
 )
 
-// packageChangelogs adds to each service and program from a Debian package
-// the CVE ids its package's changelog names. Third-party builds (sury's PHP
+// packageChangelogs adds to each service and program from a package the CVE
+// ids its package's changelog names (Debian's changelog.Debian.gz, or the
+// changelog in the rpm database on RHEL, Alma, Rocky and CloudLinux). Third-party builds (sury's PHP
 // 7.4 and 5.6, for one) backport fixes and keep the upstream version, so the
 // version alone says "vulnerable" when it is not; the changelog says which
 // CVEs the build fixed. Only components on the host itself: a container's
@@ -28,8 +29,14 @@ const maxChangelog = 32 << 20
 
 var cveRe = regexp.MustCompile(`CVE-[0-9]{4}-[0-9]{4,7}`)
 
-func (packageChangelogs) Detect(_ context.Context, e *Env, r *Report) error {
-	if !e.Exists("/var/lib/dpkg/status") {
+func (packageChangelogs) Detect(ctx context.Context, e *Env, r *Report) error {
+	var read func(pkg string) []string
+	switch {
+	case e.Exists("/var/lib/dpkg/status"):
+		read = func(pkg string) []string { return changelogCVEs(e, pkg) }
+	case e.Exists("/var/lib/rpm") || e.Exists("/usr/lib/sysimage/rpm"):
+		read = func(pkg string) []string { return rpmChangelogCVEs(ctx, e, pkg) }
+	default:
 		return errNotHere
 	}
 	cache := map[string][]string{}
@@ -40,7 +47,7 @@ func (packageChangelogs) Detect(_ context.Context, e *Env, r *Report) error {
 		}
 		cves, ok := cache[c.Package]
 		if !ok {
-			cves = changelogCVEs(e, c.Package)
+			cves = read(c.Package)
 			cache[c.Package] = cves
 		}
 		c.FixedCVEs = cves
@@ -68,6 +75,25 @@ func changelogCVEs(e *Env, pkg string) []string {
 	}
 	return cveList(text)
 }
+
+// rpmChangelogCVEs asks rpm for a package's changelog; nil when rpm fails.
+func rpmChangelogCVEs(ctx context.Context, e *Env, pkg string) []string {
+	if !rpmNameRe.MatchString(pkg) {
+		return nil
+	}
+	out, err := e.Run(ctx, false, "rpm", "-q", "--changelog", "--", pkg)
+	if err != nil && len(out) == 0 {
+		return nil
+	}
+	if len(out) > maxChangelog {
+		out = out[:maxChangelog]
+	}
+	return cveList(out)
+}
+
+// rpmNameRe: rpm package names also have capitals and underscores
+// (perl-Net-DNS, python3-PyYAML).
+var rpmNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+.-]{0,99}$`)
 
 var pkgNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,99}$`)
 
