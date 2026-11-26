@@ -199,3 +199,48 @@ func TestInfoCollector(t *testing.T) {
 		t.Error("no remote version: local")
 	}
 }
+
+func TestApply_Watched(t *testing.T) {
+	c := Config{
+		Backups: []Watched{
+			{Name: "backup", Path: "/var/lib/yomins/backup/last_run.json", MaxAge: "72h"},
+			{Name: "s3-to-ftp", Path: "/var/lib/yomins/sync/last_run.json", MaxAge: "504h"},
+		},
+		FileFreshness: []Watched{{Name: "site_backups", Path: "/home/k/www/site_backups/", MaxAge: "192h"}},
+	}
+	if err := Validate(c); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	Apply(cfg, c, ModeFull)
+	if len(cfg.Backups) != 2 || cfg.Backups[0].Name != "backup" || cfg.Backups[0].MaxAge != 72*time.Hour || cfg.Backups[1].MaxAge != 504*time.Hour {
+		t.Errorf("the default backup is replaced by name, the other added: %+v", cfg.Backups)
+	}
+	if len(cfg.FileFreshness) != 1 || cfg.FileFreshness[0].MaxAge != 192*time.Hour {
+		t.Errorf("file freshness: %+v", cfg.FileFreshness)
+	}
+
+	extra := &config.Config{}
+	Apply(extra, Config{Backups: []Watched{{Name: "db", Path: "/srv/db.json"}}}, ModeFull)
+	if len(extra.Backups) != 2 || extra.Backups[0].Path != config.DefaultBackupReport {
+		t.Errorf("the default backup stays next to an added one: %+v", extra.Backups)
+	}
+
+	limited := &config.Config{}
+	Apply(limited, c, ModeLimited)
+	if limited.Backups != nil || limited.FileFreshness != nil {
+		t.Errorf("limited mode does not choose files: %+v", limited)
+	}
+
+	for name, bad := range map[string]Config{
+		"name":    {Backups: []Watched{{Name: "Bad Name", Path: "/a"}}},
+		"path":    {Backups: []Watched{{Name: "a", Path: "a.json"}}},
+		"unclean": {FileFreshness: []Watched{{Name: "a", Path: "/a/../etc"}}},
+		"root":    {FileFreshness: []Watched{{Name: "a", Path: "/"}}},
+		"max_age": {FileFreshness: []Watched{{Name: "a", Path: "/a", MaxAge: "7d"}}},
+	} {
+		if Validate(bad) == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

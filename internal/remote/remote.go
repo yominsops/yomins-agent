@@ -8,7 +8,7 @@
 //
 // The host owner decides how far to trust it with YOMINS_REMOTE_CONFIG:
 // "full" (default), "limited" (no settings that choose what is read: log
-// paths, scrape URLs), or "off". Log files outside the local allow list are
+// paths, scrape URLs, backup reports, watched directories), or "off". Log files outside the local allow list are
 // never read whatever the server says.
 package remote
 
@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/yominsops/yomins-agent/internal/config"
@@ -39,6 +40,62 @@ type Config struct {
 	Logs               *LogsConfig         `json:"logs,omitempty"`
 	Integrations       *IntegrationsConfig `json:"integrations,omitempty"`
 	Events             *EventsConfig       `json:"events,omitempty"`
+	Backups            []Watched           `json:"backups,omitempty"`
+	FileFreshness      []Watched           `json:"file_freshness,omitempty"`
+}
+
+// Watched is a backup report or a watched directory: name, absolute path and the
+// optional age limit (a Go duration).
+type Watched struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	MaxAge string `json:"max_age,omitempty"`
+}
+
+var reWatchedName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+func validateWatched(kind string, items []Watched) error {
+	for _, w := range items {
+		if !reWatchedName.MatchString(w.Name) {
+			return fmt.Errorf("%s name %q is not valid", kind, w.Name)
+		}
+		if p := strings.TrimSuffix(w.Path, "/"); !filepath.IsAbs(w.Path) || p == "" || filepath.Clean(p) != p {
+			return fmt.Errorf("%s path %q must be an absolute clean path", kind, w.Path)
+		}
+		if w.MaxAge != "" {
+			if d, err := time.ParseDuration(w.MaxAge); err != nil || d <= 0 {
+				return fmt.Errorf("%s %q max_age %q is not a duration", kind, w.Name, w.MaxAge)
+			}
+		}
+	}
+	return nil
+}
+
+func toWatched(items []Watched) []config.WatchedFile {
+	out := make([]config.WatchedFile, 0, len(items))
+	for _, w := range items {
+		d, _ := time.ParseDuration(w.MaxAge)
+		out = append(out, config.WatchedFile{Name: w.Name, Path: w.Path, MaxAge: d})
+	}
+	return out
+}
+
+// withBackups puts the remote backup reports over the default ones, by name: one named
+// like a default replaces it, the others are added.
+func withBackups(base []config.WatchedFile, remote []config.WatchedFile) []config.WatchedFile {
+	out := append([]config.WatchedFile{}, base...)
+	for _, r := range remote {
+		replaced := false
+		for i := range out {
+			if out[i].Name == r.Name {
+				out[i], replaced = r, true
+			}
+		}
+		if !replaced {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 type LogsConfig struct {
@@ -102,6 +159,12 @@ func Validate(c Config) error {
 			return fmt.Errorf("interval %q out of range", *c.Interval)
 		}
 	}
+	if err := validateWatched("backup", c.Backups); err != nil {
+		return err
+	}
+	if err := validateWatched("file_freshness", c.FileFreshness); err != nil {
+		return err
+	}
 	if c.Logs != nil {
 		for _, p := range c.Logs.Redact {
 			if _, err := regexp.Compile(p); err != nil {
@@ -160,6 +223,17 @@ func Apply(cfg *config.Config, c Config, mode string) {
 			}
 			cfg.ScrapeURLs = append(cfg.ScrapeURLs, i.ScrapeURLs...)
 		}
+	}
+	// What files are read is chosen only with full trust.
+	if mode == ModeFull {
+		if c.Backups != nil {
+			base := cfg.Backups
+			if base == nil {
+				base = config.DefaultBackups()
+			}
+			cfg.Backups = withBackups(base, toWatched(c.Backups))
+		}
+		cfg.FileFreshness = append(cfg.FileFreshness, toWatched(c.FileFreshness)...)
 	}
 	if e := c.Events; e != nil {
 		set := func(dst *bool, v *bool, disable bool) {

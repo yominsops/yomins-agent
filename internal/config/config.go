@@ -76,6 +76,25 @@ type Config struct {
 	NginxStatusURL      string   // --nginx-status-url / YOMINS_NGINX_STATUS_URL
 	MySQLDSN            string   // --mysql-dsn / YOMINS_MYSQL_DSN
 	ScrapeURLs          []string // --scrape-urls / YOMINS_SCRAPE_URLS
+
+	// Watched files (remote configuration, mode full).
+	Backups       []WatchedFile // backup reports (last_run.json); nil: DefaultBackups
+	FileFreshness []WatchedFile // directories whose newest file is reported
+}
+
+// WatchedFile is a backup report or a directory the agent watches.
+type WatchedFile struct {
+	Name   string        // the backup or check label
+	Path   string        // absolute
+	MaxAge time.Duration // 0: none set (the server's rule decides)
+}
+
+// DefaultBackupReport is the report yomins-backup writes.
+const DefaultBackupReport = "/var/lib/yomins/backup/last_run.json"
+
+// DefaultBackups are the backup reports read without remote configuration.
+func DefaultBackups() []WatchedFile {
+	return []WatchedFile{{Name: "backup", Path: DefaultBackupReport}}
 }
 
 // Load parses configuration from CLI flags and environment variables.
